@@ -34,6 +34,11 @@ struct CompanionPanelView: View {
                 modelPickerRow
                     .padding(.horizontal, 16)
 
+                if companionManager.isOllamaSelected {
+                    ollamaModelPickerRow
+                        .padding(.horizontal, 16)
+                }
+
                 launchAtLoginToggleRow
                     .padding(.horizontal, 16)
             }
@@ -642,6 +647,7 @@ struct CompanionPanelView: View {
             HStack(spacing: 0) {
                 modelOptionButton(label: "Sonnet", modelID: "claude-sonnet-4-6")
                 modelOptionButton(label: "Opus", modelID: "claude-opus-4-6")
+                ollamaOptionButton
             }
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -672,6 +678,99 @@ struct CompanionPanelView: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
+    }
+
+    /// The Ollama segment selects the backend; the specific model is chosen
+    /// in the row that appears beneath the picker.
+    private var ollamaOptionButton: some View {
+        let isSelected = companionManager.isOllamaSelected
+        return Button(action: {
+            guard !companionManager.isOllamaSelected else { return }
+            companionManager.selectOllamaAsChatProvider()
+        }) {
+            Text("Ollama")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(isSelected ? DS.Colors.textPrimary : DS.Colors.textTertiary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isSelected ? Color.white.opacity(0.1) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+    }
+
+    // MARK: - Ollama Model Picker
+
+    private var ollamaModelPickerRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Ollama model")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+
+                Spacer()
+
+                Menu {
+                    ForEach(companionManager.installedOllamaModels) { installedOllamaModel in
+                        Button(action: {
+                            companionManager.selectOllamaModel(named: installedOllamaModel.name)
+                        }) {
+                            // The eye marks models that can see the screen and point
+                            if installedOllamaModel.supportsVision {
+                                Label(installedOllamaModel.name, systemImage: "eye")
+                            } else {
+                                Text(installedOllamaModel.name)
+                            }
+                        }
+                    }
+
+                    if !companionManager.installedOllamaModels.isEmpty {
+                        Divider()
+                    }
+
+                    Button("Refresh list") {
+                        Task {
+                            await companionManager.refreshInstalledOllamaModels()
+                        }
+                    }
+                } label: {
+                    Text(companionManager.selectedOllamaModelName ?? "Pick a model")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(DS.Colors.textPrimary)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .pointerCursor()
+            }
+
+            Text(ollamaModelCaptionText)
+                .font(.system(size: 10))
+                .foregroundColor(companionManager.ollamaModelListErrorMessage == nil
+                                 ? DS.Colors.textTertiary
+                                 : DS.Colors.destructiveText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// One line under the Ollama menu: what's wrong, or what the picked model
+    /// can do, since a text-only model silently loses screen help and pointing.
+    private var ollamaModelCaptionText: String {
+        if let ollamaModelListErrorMessage = companionManager.ollamaModelListErrorMessage {
+            return ollamaModelListErrorMessage
+        }
+        if companionManager.isRefreshingOllamaModels && companionManager.installedOllamaModels.isEmpty {
+            return "Looking for models…"
+        }
+        guard let selectedOllamaInstalledModel = companionManager.selectedOllamaInstalledModel else {
+            return "Runs on this Mac. Models with an eye can see your screen."
+        }
+        return selectedOllamaInstalledModel.supportsVision
+            ? "Sees your screen and can point. Runs on this Mac."
+            : "Text only: can't see your screen or point."
     }
 
     // MARK: - DM Farza Button

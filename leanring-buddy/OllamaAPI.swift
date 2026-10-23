@@ -38,6 +38,14 @@ struct OllamaResponseError: LocalizedError {
     }
 }
 
+/// Ollama is the selected backend but there's no usable model to send the
+/// question to, e.g. none are installed yet.
+struct OllamaModelSelectionError: LocalizedError {
+    let message: String
+
+    var errorDescription: String? { message }
+}
+
 enum OllamaConfiguration {
     /// The Ollama server's base URL, from the CLICKY_OLLAMA_BASE_URL build
     /// setting (via the ClickyOllamaBaseURL Info.plist key). Falls back to

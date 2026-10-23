@@ -469,6 +469,14 @@ final class ServiceHealthMonitor: ObservableObject {
     }
 
     private static func diagnoseOllamaFailure(error: Error) -> ServiceFailureDiagnosis {
+        if let ollamaModelSelectionError = error as? OllamaModelSelectionError {
+            return ServiceFailureDiagnosis(
+                summaryMessage: ollamaModelSelectionError.message,
+                spokenMessage: "Pick an Ollama model in the menu bar first.",
+                isWorkerProxyProblem: false
+            )
+        }
+
         if let urlError = error as? URLError {
             if urlError.code == .timedOut {
                 return ServiceFailureDiagnosis(
