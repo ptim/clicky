@@ -408,6 +408,7 @@ final class CompanionManager: ObservableObject {
         await serviceHealthMonitor.runTest(
             for: component,
             claudeModelIdentifier: selectedModel,
+            ollamaModelName: nil,
             transcriptionProviderDisplayName: buddyDictationManager.transcriptionProviderDisplayName
         )
     }

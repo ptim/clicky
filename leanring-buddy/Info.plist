@@ -6,6 +6,8 @@
 	<string>$(CLICKY_PROXY_SHARED_SECRET)</string>
 	<key>ClickyWorkerBaseURL</key>
 	<string>$(CLICKY_WORKER_BASE_URL)</string>
+	<key>ClickyOllamaBaseURL</key>
+	<string>$(CLICKY_OLLAMA_BASE_URL)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

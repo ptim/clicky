@@ -73,3 +73,58 @@ final class ClaudeChatProvider: BuddyChatProvider {
         return fullResponseText
     }
 }
+
+/// A model served by the local Ollama server. Vision models get the
+/// screenshots and can point; text-only models answer from the transcript.
+@MainActor
+final class OllamaChatProvider: BuddyChatProvider {
+    let displayName = "Ollama"
+    let monitoredServiceComponent = MonitoredServiceComponent.ollamaChat
+
+    let installedModel: OllamaInstalledModel
+    private let ollamaAPI: OllamaAPI
+
+    var supportsScreenshotImages: Bool { installedModel.supportsVision }
+
+    init(installedModel: OllamaInstalledModel, ollamaAPI: OllamaAPI) {
+        self.installedModel = installedModel
+        self.ollamaAPI = ollamaAPI
+    }
+
+    func generateStreamingResponse(
+        images: [(data: Data, label: String)],
+        systemPrompt: String,
+        conversationHistory: [(userTranscript: String, assistantResponse: String)],
+        userPrompt: String,
+        onTextChunk: @escaping @MainActor @Sendable (String) -> Void
+    ) async throws -> String {
+        var chatMessages: [[String: Any]] = [["role": "system", "content": systemPrompt]]
+        for exchange in conversationHistory {
+            chatMessages.append(["role": "user", "content": exchange.userTranscript])
+            chatMessages.append(["role": "assistant", "content": exchange.assistantResponse])
+        }
+
+        // Ollama attaches images to a message as a bare list, unlike Claude's
+        // interleaved image and text blocks. The labels (which carry the
+        // pixel dimensions the [POINT] coordinates are measured in) go into
+        // the text in the same order, so each one reads as "image N".
+        var currentUserMessage: [String: Any] = ["role": "user"]
+        if images.isEmpty {
+            currentUserMessage["content"] = userPrompt
+        } else {
+            let numberedImageLabels = images.enumerated().map { imageIndex, image in
+                "image \(imageIndex + 1): \(image.label)"
+            }
+            currentUserMessage["content"] = numberedImageLabels.joined(separator: "\n") + "\n\n" + userPrompt
+            currentUserMessage["images"] = images.map { image in image.data.base64EncodedString() }
+        }
+        chatMessages.append(currentUserMessage)
+
+        return try await ollamaAPI.streamChat(
+            modelName: installedModel.name,
+            shouldDisableThinking: installedModel.supportsThinking,
+            messages: chatMessages,
+            onTextChunk: onTextChunk
+        )
+    }
+}

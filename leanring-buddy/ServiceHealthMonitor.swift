@@ -20,6 +20,7 @@ import ScreenCaptureKit
 enum MonitoredServiceComponent: String, CaseIterable, Identifiable {
     case workerProxy
     case claudeChat
+    case ollamaChat
     case elevenLabsSpeech
     case speechToText
     case screenCapture
@@ -31,6 +32,7 @@ enum MonitoredServiceComponent: String, CaseIterable, Identifiable {
         switch self {
         case .workerProxy: return "Worker proxy"
         case .claudeChat: return "Claude"
+        case .ollamaChat: return "Ollama"
         case .elevenLabsSpeech: return "ElevenLabs voice"
         case .speechToText: return "Speech to text"
         case .screenCapture: return "Screen capture"
@@ -42,6 +44,7 @@ enum MonitoredServiceComponent: String, CaseIterable, Identifiable {
         switch self {
         case .workerProxy: return "server.rack"
         case .claudeChat: return "sparkles"
+        case .ollamaChat: return "desktopcomputer"
         case .elevenLabsSpeech: return "speaker.wave.2"
         case .speechToText: return "waveform"
         case .screenCapture: return "rectangle.dashed.badge.record"
@@ -195,6 +198,7 @@ final class ServiceHealthMonitor: ObservableObject {
     func runTest(
         for component: MonitoredServiceComponent,
         claudeModelIdentifier: String,
+        ollamaModelName: String?,
         transcriptionProviderDisplayName: String
     ) async {
         guard component != .permissions else { return }
@@ -205,6 +209,8 @@ final class ServiceHealthMonitor: ObservableObject {
             await testWorkerProxy()
         case .claudeChat:
             await testClaudeChat(claudeModelIdentifier: claudeModelIdentifier)
+        case .ollamaChat:
+            await testOllamaChat(ollamaModelName: ollamaModelName)
         case .elevenLabsSpeech:
             await testElevenLabsSpeech()
         case .speechToText:
@@ -280,6 +286,37 @@ final class ServiceHealthMonitor: ObservableObject {
             }
         } catch {
             recordFailure(for: .claudeChat, error: error)
+        }
+    }
+
+    /// Free and local: checks the Ollama server answers, then that the model
+    /// picked in the panel is actually pulled. Doesn't generate anything,
+    /// because a cold model load can take longer than the test should.
+    private func testOllamaChat(ollamaModelName: String?) async {
+        let ollamaAPI = OllamaAPI()
+        do {
+            let serverVersion = try await ollamaAPI.fetchServerVersion()
+            guard let ollamaModelName else {
+                recordFailure(
+                    for: .ollamaChat,
+                    summaryMessage: "Running (v\(serverVersion)), but no model picked",
+                    detailedErrorText: nil
+                )
+                return
+            }
+
+            let installedModels = try await ollamaAPI.fetchInstalledModels()
+            if installedModels.contains(where: { $0.name == ollamaModelName }) {
+                recordSuccess(for: .ollamaChat, summaryMessage: "Running, \(ollamaModelName) installed")
+            } else {
+                recordFailure(
+                    for: .ollamaChat,
+                    summaryMessage: "\(ollamaModelName) isn't installed. Run: ollama pull \(ollamaModelName)",
+                    detailedErrorText: "Installed: " + installedModels.map(\.name).joined(separator: ", ")
+                )
+            }
+        } catch {
+            recordFailure(for: .ollamaChat, error: error)
         }
     }
 
@@ -382,6 +419,12 @@ final class ServiceHealthMonitor: ObservableObject {
     static func diagnoseFailure(of component: MonitoredServiceComponent, error: Error) -> ServiceFailureDiagnosis {
         let componentName = component.displayName
 
+        // Ollama is called directly, not through the worker, so its
+        // connection failures mean "Ollama isn't running", not a worker problem.
+        if component == .ollamaChat {
+            return diagnoseOllamaFailure(error: error)
+        }
+
         if let urlError = error as? URLError {
             switch urlError.code {
             case .cannotConnectToHost, .cannotFindHost, .networkConnectionLost, .timedOut, .dnsLookupFailed:
@@ -421,6 +464,47 @@ final class ServiceHealthMonitor: ObservableObject {
         return ServiceFailureDiagnosis(
             summaryMessage: error.localizedDescription,
             spokenMessage: "Something went wrong with \(componentName). Check the status section in the menu bar.",
+            isWorkerProxyProblem: false
+        )
+    }
+
+    private static func diagnoseOllamaFailure(error: Error) -> ServiceFailureDiagnosis {
+        if let urlError = error as? URLError {
+            if urlError.code == .timedOut {
+                return ServiceFailureDiagnosis(
+                    summaryMessage: "Ollama timed out. The model may be too large for this Mac or still loading",
+                    spokenMessage: "Ollama took too long to answer. Try again, or pick a smaller model.",
+                    isWorkerProxyProblem: false
+                )
+            }
+            if urlError.code == .cannotConnectToHost || urlError.code == .cannotFindHost
+                || urlError.code == .networkConnectionLost {
+                return ServiceFailureDiagnosis(
+                    summaryMessage: "Can't reach Ollama at \(OllamaConfiguration.baseURL). Is it running?",
+                    spokenMessage: "I can't reach Ollama. Make sure it's running.",
+                    isWorkerProxyProblem: false
+                )
+            }
+        }
+
+        if let ollamaResponseError = error as? OllamaResponseError {
+            if ollamaResponseError.httpStatusCode == 404 {
+                return ServiceFailureDiagnosis(
+                    summaryMessage: "Model not installed: \(ollamaResponseError.errorMessage)",
+                    spokenMessage: "That Ollama model isn't installed. Pick another one in the menu bar.",
+                    isWorkerProxyProblem: false
+                )
+            }
+            return ServiceFailureDiagnosis(
+                summaryMessage: "Ollama error: \(ollamaResponseError.errorMessage)",
+                spokenMessage: "Ollama returned an error. Check the status section in the menu bar.",
+                isWorkerProxyProblem: false
+            )
+        }
+
+        return ServiceFailureDiagnosis(
+            summaryMessage: error.localizedDescription,
+            spokenMessage: "Something went wrong with Ollama. Check the status section in the menu bar.",
             isWorkerProxyProblem: false
         )
     }

@@ -10,4 +10,9 @@
 // substitution keeps the URL's `//` from being read as one.
 CLICKY_WORKER_BASE_URL = https:/$()/your-worker-name.your-subdomain.workers.dev
 
+// Base URL of the local Ollama server, used when an Ollama model is picked.
+// The app calls it directly (not through the worker). Override it in
+// Secrets.xcconfig if Ollama listens somewhere else.
+CLICKY_OLLAMA_BASE_URL = http:/$()/localhost:11434
+
 #include? "Secrets.xcconfig"
