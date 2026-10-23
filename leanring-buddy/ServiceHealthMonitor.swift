@@ -12,6 +12,7 @@
 //  Test button in the panel.
 //
 
+import Combine
 import Foundation
 import ScreenCaptureKit
 
