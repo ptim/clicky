@@ -420,8 +420,11 @@
 				INFOPLIST_FILE = "leanring-buddy/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Clicky;
 				INFOPLIST_KEY_CFBundleName = Clicky;
+				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Clicky uses your microphone so you can talk to it";
 				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Clicky needs screen recording access to see your screen and help you.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Clicky uses speech recognition to transcribe your voice when you talk to it";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -459,8 +462,11 @@
 				INFOPLIST_FILE = "leanring-buddy/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Clicky;
 				INFOPLIST_KEY_CFBundleName = Clicky;
+				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Clicky uses your microphone so you can talk to it";
 				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Clicky needs screen recording access to see your screen and help you.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Clicky uses speech recognition to transcribe your voice when you talk to it";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

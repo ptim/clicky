@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>LSUIElement</key>
-	<true/>
 	<key>ClickyProxySharedSecret</key>
 	<string>$(CLICKY_PROXY_SHARED_SECRET)</string>
 	<key>ClickyWorkerBaseURL</key>
@@ -13,13 +11,9 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	<key>VoiceTranscriptionProvider</key>
-	<string>assemblyai</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Clicky uses your microphone so you can talk to it</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Clicky needs screen recording access to see your screen and help you.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Clicky uses speech recognition to transcribe your voice when you talk to it</string>
+	<key>VoiceTranscriptionProvider</key>
+	<string>assemblyai</string>
 </dict>
 </plist>
