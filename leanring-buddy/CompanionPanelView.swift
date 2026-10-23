@@ -28,6 +28,9 @@ struct CompanionPanelView: View {
                 Spacer()
                     .frame(height: 12)
 
+                pauseToggleRow
+                    .padding(.horizontal, 16)
+
                 modelPickerRow
                     .padding(.horizontal, 16)
 
@@ -528,6 +531,36 @@ struct CompanionPanelView: View {
         .padding(.vertical, 4)
     }
 
+    // MARK: - Pause Toggle
+
+    private var pauseToggleRow: some View {
+        HStack {
+            HStack(spacing: 8) {
+                Image(systemName: "pause.circle")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .frame(width: 16)
+
+                Text("Pause")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+            }
+
+            Spacer()
+
+            Toggle("", isOn: Binding(
+                get: { companionManager.isPaused },
+                set: { companionManager.setPaused($0) }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .tint(DS.Colors.accent)
+            .scaleEffect(0.8)
+            .pointerCursor()
+        }
+        .padding(.vertical, 4)
+    }
+
     // MARK: - Launch At Login Toggle
 
     private var launchAtLoginToggleRow: some View {
@@ -703,7 +736,7 @@ struct CompanionPanelView: View {
     }
 
     private var statusDotColor: Color {
-        if !companionManager.isOverlayVisible {
+        if companionManager.isPaused || !companionManager.isOverlayVisible {
             return DS.Colors.textTertiary
         }
         switch companionManager.voiceState {
@@ -719,6 +752,9 @@ struct CompanionPanelView: View {
     private var statusText: String {
         if !companionManager.hasCompletedOnboarding || !companionManager.allPermissionsGranted {
             return "Setup"
+        }
+        if companionManager.isPaused {
+            return "Paused"
         }
         if !companionManager.isOverlayVisible {
             return "Ready"
