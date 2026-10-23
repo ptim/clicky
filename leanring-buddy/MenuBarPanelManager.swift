@@ -59,8 +59,15 @@ final class MenuBarPanelManager: NSObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self, let panel = self.panel, panel.isVisible else { return }
-            self.positionPanelBelowStatusItem()
+            // The notification is posted from inside SwiftUI's layout pass, and
+            // resizing the window there is reentrant layout (AppKit skips the
+            // pass and logs a warning). Defer to the next run loop turn.
+            DispatchQueue.main.async {
+                guard let self, let panel = self.panel, panel.isVisible else { return }
+                let fittingPanelHeight = panel.contentView?.fittingSize.height ?? panel.frame.height
+                guard abs(fittingPanelHeight - panel.frame.height) > 0.5 else { return }
+                self.positionPanelBelowStatusItem()
+            }
         }
     }
 

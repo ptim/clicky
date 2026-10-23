@@ -43,7 +43,7 @@ enum MonitoredServiceComponent: String, CaseIterable, Identifiable {
         case .workerProxy: return "server.rack"
         case .claudeChat: return "sparkles"
         case .elevenLabsSpeech: return "speaker.wave.2"
-        case .speechToText: return "mic.badge.waveform"
+        case .speechToText: return "waveform"
         case .screenCapture: return "rectangle.dashed.badge.record"
         case .permissions: return "lock.shield"
         }
