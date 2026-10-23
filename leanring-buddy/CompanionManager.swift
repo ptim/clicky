@@ -867,8 +867,9 @@ final class CompanionManager: ObservableObject {
                 var labeledImages: [(data: Data, label: String)] = []
                 if chatProvider.supportsScreenshotImages {
                     pipelineStageInProgress = .screenCapture
-                    // Capture all connected screens so the AI has full context
-                    screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+                    // Only the screen under the cursor is sent: it saves tokens
+                    // and stops the model answering about another monitor.
+                    screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG(onlyCursorScreen: true)
                     serviceHealthMonitor.recordSuccess(for: .screenCapture)
 
                     guard !Task.isCancelled else { return }
@@ -919,7 +920,7 @@ final class CompanionManager: ObservableObject {
                        screenNumber >= 1 && screenNumber <= screenCaptures.count {
                         return screenCaptures[screenNumber - 1]
                     }
-                    return screenCaptures.first(where: { $0.isCursorScreen })
+                    return screenCaptures.first(where: { $0.isCursorScreen }) ?? screenCaptures.first
                 }()
 
                 if let pointCoordinate = parseResult.coordinate,
