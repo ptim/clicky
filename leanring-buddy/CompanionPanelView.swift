@@ -97,6 +97,16 @@ struct CompanionPanelView: View {
                 .background(DS.Colors.borderSubtle)
                 .padding(.horizontal, 16)
 
+            CompanionHistorySectionView(
+                interactionHistoryStore: companionManager.interactionHistoryStore
+            )
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+
+            Divider()
+                .background(DS.Colors.borderSubtle)
+                .padding(.horizontal, 16)
+
             footerSection
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)

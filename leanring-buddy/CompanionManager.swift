@@ -67,6 +67,8 @@ final class CompanionManager: ObservableObject {
     let overlayWindowManager = OverlayWindowManager()
     /// Tracks which part of the pipeline is failing, for the panel's Status section.
     let serviceHealthMonitor = ServiceHealthMonitor()
+    /// Recent interactions with their screenshots, for the History section.
+    let interactionHistoryStore = CompanionInteractionHistoryStore()
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
@@ -854,16 +856,23 @@ final class CompanionManager: ObservableObject {
             // right Status row instead of one generic error.
             var pipelineStageInProgress: MonitoredServiceComponent = isOllamaSelected ? .ollamaChat : .claudeChat
 
+            // Declared outside the do block so a failure can still be
+            // recorded in History with whatever was captured before it.
+            var chatModelDescription = isOllamaSelected
+                ? "Ollama · \(selectedOllamaModelName ?? "no model")"
+                : "Claude · \(claudeAPI.model)"
+            // Text-only models never get the screenshot: it isn't even
+            // captured. With no captures, pointing below is skipped too.
+            var screenCaptures: [CompanionScreenCapture] = []
+
             do {
                 // Resolve the provider once so a picker change mid-response
                 // can't mix two backends within one exchange.
                 let chatProvider = try await resolveActiveChatProvider()
+                chatModelDescription = chatProvider.chatModelDescription
 
                 guard !Task.isCancelled else { return }
 
-                // Text-only models never get the screenshot: it isn't even
-                // captured. With no captures, pointing below is skipped too.
-                var screenCaptures: [CompanionScreenCapture] = []
                 var labeledImages: [(data: Data, label: String)] = []
                 if chatProvider.supportsScreenshotImages {
                     pipelineStageInProgress = .screenCapture
@@ -903,6 +912,17 @@ final class CompanionManager: ObservableObject {
                 // Parse the [POINT:...] tag from Claude's response
                 let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
                 let spokenText = parseResult.spokenText
+
+                interactionHistoryStore.record(CompanionInteractionHistoryEntry(
+                    interactionDate: Date(),
+                    transcript: transcript,
+                    chatModelDescription: chatModelDescription,
+                    screenCapture: screenCaptures.first,
+                    rawResponseText: fullResponseText,
+                    pointCoordinate: parseResult.coordinate,
+                    pointElementLabel: parseResult.elementLabel,
+                    errorMessage: nil
+                ))
 
                 // Handle element pointing if Claude returned coordinates.
                 // Switch to idle BEFORE setting the location so the triangle
@@ -1002,6 +1022,16 @@ final class CompanionManager: ObservableObject {
                         for: pipelineStageInProgress,
                         error: error
                     )
+                    interactionHistoryStore.record(CompanionInteractionHistoryEntry(
+                        interactionDate: Date(),
+                        transcript: transcript,
+                        chatModelDescription: chatModelDescription,
+                        screenCapture: screenCaptures.first,
+                        rawResponseText: nil,
+                        pointCoordinate: nil,
+                        pointElementLabel: nil,
+                        errorMessage: failureDiagnosis.summaryMessage
+                    ))
                     speakWithSystemVoice(failureDiagnosis.spokenMessage)
                 }
             }

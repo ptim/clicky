@@ -298,8 +298,9 @@ struct ServiceStatusSectionView: View {
     }
 }
 
-/// Small outlined capsule button used for the per-row Test and Copy actions.
-private struct ServiceStatusPillButton: View {
+/// Small outlined capsule button used for the per-row Test and Copy actions,
+/// and by the History section.
+struct ServiceStatusPillButton: View {
     let label: String
     let isDisabled: Bool
     let action: () -> Void

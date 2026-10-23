@@ -24,6 +24,9 @@ protocol BuddyChatProvider: AnyObject {
     /// The Status section row that a failure of this provider should turn red.
     var monitoredServiceComponent: MonitoredServiceComponent { get }
 
+    /// Backend and model, e.g. "Ollama · gemma4:latest", for the History section.
+    var chatModelDescription: String { get }
+
     /// Sends one chat turn and streams the response back. Returns the full
     /// response text once the stream finishes. `onTextChunk` receives the
     /// accumulated text so far, matching ClaudeAPI's existing callback.
@@ -45,6 +48,8 @@ final class ClaudeChatProvider: BuddyChatProvider {
     let monitoredServiceComponent = MonitoredServiceComponent.claudeChat
 
     private let claudeAPI: ClaudeAPI
+
+    var chatModelDescription: String { "Claude · \(claudeAPI.model)" }
 
     init(claudeAPI: ClaudeAPI) {
         self.claudeAPI = claudeAPI
@@ -85,6 +90,8 @@ final class OllamaChatProvider: BuddyChatProvider {
     private let ollamaAPI: OllamaAPI
 
     var supportsScreenshotImages: Bool { installedModel.supportsVision }
+
+    var chatModelDescription: String { "Ollama · \(installedModel.name)" }
 
     init(installedModel: OllamaInstalledModel, ollamaAPI: OllamaAPI) {
         self.installedModel = installedModel
