@@ -16,6 +16,9 @@ import SwiftUI
 
 extension Notification.Name {
     static let clickyDismissPanel = Notification.Name("clickyDismissPanel")
+    /// Posted by the panel content when its height changes (for example the
+    /// Status section expanding) so the panel can resize to fit.
+    static let clickyPanelContentHeightDidChange = Notification.Name("clickyPanelContentHeightDidChange")
 }
 
 /// Custom NSPanel subclass that can become the key window even with
@@ -30,6 +33,7 @@ final class MenuBarPanelManager: NSObject {
     private var panel: NSPanel?
     private var clickOutsideMonitor: Any?
     private var dismissPanelObserver: NSObjectProtocol?
+    private var panelContentHeightObserver: NSObjectProtocol?
 
     private let companionManager: CompanionManager
     private let panelWidth: CGFloat = 320
@@ -47,6 +51,17 @@ final class MenuBarPanelManager: NSObject {
         ) { [weak self] _ in
             self?.hidePanel()
         }
+
+        // The panel's height is otherwise only measured when it opens, so
+        // content that grows while it's open would be clipped.
+        panelContentHeightObserver = NotificationCenter.default.addObserver(
+            forName: .clickyPanelContentHeightDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, let panel = self.panel, panel.isVisible else { return }
+            self.positionPanelBelowStatusItem()
+        }
     }
 
     deinit {
@@ -54,6 +69,9 @@ final class MenuBarPanelManager: NSObject {
             NSEvent.removeMonitor(monitor)
         }
         if let observer = dismissPanelObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = panelContentHeightObserver {
             NotificationCenter.default.removeObserver(observer)
         }
     }

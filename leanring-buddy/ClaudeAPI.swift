@@ -171,11 +171,7 @@ class ClaudeAPI {
                 errorBodyChunks.append(line)
             }
             let errorBody = errorBodyChunks.joined(separator: "\n")
-            throw NSError(
-                domain: "ClaudeAPI",
-                code: httpResponse.statusCode,
-                userInfo: [NSLocalizedDescriptionKey: "API Error (\(httpResponse.statusCode)): \(errorBody)"]
-            )
+            throw WorkerProxyResponseError(httpStatusCode: httpResponse.statusCode, responseBody: errorBody)
         }
 
         // Parse SSE stream — each event is "data: {json}\n\n"
@@ -193,6 +189,13 @@ class ClaudeAPI {
                   let eventPayload = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
                   let eventType = eventPayload["type"] as? String else {
                 continue
+            }
+
+            // Errors that happen after the 200 response has started (for example
+            // overloaded_error) arrive as an SSE event. Without this the stream
+            // just ends and the user hears nothing at all.
+            if eventType == "error" {
+                throw WorkerProxyResponseError(httpStatusCode: httpResponse.statusCode, responseBody: jsonString)
             }
 
             // We care about content_block_delta events that contain text chunks
