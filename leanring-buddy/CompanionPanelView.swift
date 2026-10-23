@@ -78,10 +78,33 @@ struct CompanionPanelView: View {
                 .background(DS.Colors.borderSubtle)
                 .padding(.horizontal, 16)
 
+            ServiceStatusSectionView(
+                serviceHealthMonitor: companionManager.serviceHealthMonitor,
+                companionManager: companionManager
+            )
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+
+            Divider()
+                .background(DS.Colors.borderSubtle)
+                .padding(.horizontal, 16)
+
             footerSection
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
         }
+        // Always lay out at the content's natural height and report changes,
+        // so the panel can grow when the Status section expands instead of
+        // clipping it to the height measured when the panel opened.
+        .fixedSize(horizontal: false, vertical: true)
+        .background(
+            GeometryReader { panelContentGeometry in
+                Color.clear
+                    .onChange(of: panelContentGeometry.size.height) { _, _ in
+                        NotificationCenter.default.post(name: .clickyPanelContentHeightDidChange, object: nil)
+                    }
+            }
+        )
         .frame(width: 320)
         .background(panelBackground)
     }

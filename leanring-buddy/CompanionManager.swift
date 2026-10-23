@@ -65,6 +65,8 @@ final class CompanionManager: ObservableObject {
     let buddyDictationManager = BuddyDictationManager()
     let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
     let overlayWindowManager = OverlayWindowManager()
+    /// Tracks which part of the pipeline is failing, for the panel's Status section.
+    let serviceHealthMonitor = ServiceHealthMonitor()
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
@@ -78,6 +80,11 @@ final class CompanionManager: ObservableObject {
         return ElevenLabsTTSClient(proxyURL: WorkerProxyConfiguration.textToSpeechURL)
     }()
 
+    /// macOS system voice used when ElevenLabs fails, both to read Claude's
+    /// answer aloud and to say what went wrong. Kept as a property so a new
+    /// push-to-talk or Pause can stop it mid-sentence.
+    private let fallbackSpeechSynthesizer = AVSpeechSynthesizer()
+
     /// Conversation history so Claude remembers prior exchanges within a session.
     /// Each entry is the user's transcript and Claude's response.
     private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
@@ -89,6 +96,7 @@ final class CompanionManager: ObservableObject {
     private var shortcutTransitionCancellable: AnyCancellable?
     private var voiceStateCancellable: AnyCancellable?
     private var audioPowerCancellable: AnyCancellable?
+    private var dictationErrorCancellable: AnyCancellable?
     private var accessibilityCheckTimer: Timer?
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     /// Scheduled hide for transient cursor mode — cancelled if the user
@@ -177,6 +185,7 @@ final class CompanionManager: ObservableObject {
             currentResponseTask?.cancel()
             currentResponseTask = nil
             elevenLabsTTSClient.stopPlayback()
+            fallbackSpeechSynthesizer.stopSpeaking(at: .immediate)
             clearDetectedElementLocation()
             // The cancelled response task skips its own reset to idle
             voiceState = .idle
@@ -204,6 +213,12 @@ final class CompanionManager: ObservableObject {
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
+        bindDictationErrors()
+        // Checking the worker is free (it never reaches a paid API), so do it
+        // on launch to catch a stopped `wrangler dev` before the first question.
+        Task {
+            await testServiceComponent(.workerProxy)
+        }
         // Eagerly touch the Claude API so its TLS warmup handshake completes
         // well before the onboarding demo fires at ~40s into the video.
         _ = claudeAPI
@@ -323,6 +338,7 @@ final class CompanionManager: ObservableObject {
         shortcutTransitionCancellable?.cancel()
         voiceStateCancellable?.cancel()
         audioPowerCancellable?.cancel()
+        dictationErrorCancellable?.cancel()
         accessibilityCheckTimer?.invalidate()
         accessibilityCheckTimer = nil
     }
@@ -357,6 +373,45 @@ final class CompanionManager: ObservableObject {
         // SCShareableContent picker, we don't need to re-check it.
         if !hasScreenContentPermission {
             hasScreenContentPermission = UserDefaults.standard.bool(forKey: "hasScreenContentPermission")
+        }
+
+        serviceHealthMonitor.recordPermissionState(missingPermissionNames: missingPermissionNames)
+    }
+
+    /// Names of the required permissions that are not granted yet, for the
+    /// Permissions row in the Status section.
+    private var missingPermissionNames: [String] {
+        var missingPermissionNames: [String] = []
+        if !hasMicrophonePermission { missingPermissionNames.append("Microphone") }
+        if !hasAccessibilityPermission { missingPermissionNames.append("Accessibility") }
+        if !hasScreenRecordingPermission { missingPermissionNames.append("Screen Recording") }
+        if !hasScreenContentPermission { missingPermissionNames.append("Screen Content") }
+        return missingPermissionNames
+    }
+
+    // MARK: - Service Status Tests
+
+    /// Runs the Status section's Test button for one component.
+    func testServiceComponent(_ component: MonitoredServiceComponent) async {
+        if component == .permissions {
+            refreshAllPermissions()
+            return
+        }
+        await serviceHealthMonitor.runTest(
+            for: component,
+            claudeModelIdentifier: selectedModel,
+            transcriptionProviderDisplayName: buddyDictationManager.transcriptionProviderDisplayName
+        )
+    }
+
+    /// Runs every component's test in parallel for the "Test all" button.
+    func testAllServiceComponents() async {
+        await withTaskGroup(of: Void.self) { taskGroup in
+            for component in MonitoredServiceComponent.allCases {
+                taskGroup.addTask { @MainActor in
+                    await self.testServiceComponent(component)
+                }
+            }
         }
     }
 
@@ -436,6 +491,21 @@ final class CompanionManager: ObservableObject {
             }
     }
 
+    /// The dictation manager already turns transcription failures into a
+    /// readable message; forward each one to the Status section.
+    private func bindDictationErrors() {
+        dictationErrorCancellable = buddyDictationManager.$lastErrorMessage
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] lastErrorMessage in
+                guard let self, let lastErrorMessage else { return }
+                self.serviceHealthMonitor.recordFailure(
+                    for: .speechToText,
+                    summaryMessage: lastErrorMessage,
+                    detailedErrorText: "\(self.buddyDictationManager.transcriptionProviderDisplayName): \(lastErrorMessage)"
+                )
+            }
+    }
+
     private func bindVoiceStateObservation() {
         voiceStateCancellable = buddyDictationManager.$isRecordingFromKeyboardShortcut
             .combineLatest(
@@ -505,6 +575,7 @@ final class CompanionManager: ObservableObject {
             // Cancel any in-progress response and TTS from a previous utterance
             currentResponseTask?.cancel()
             elevenLabsTTSClient.stopPlayback()
+            fallbackSpeechSynthesizer.stopSpeaking(at: .immediate)
             clearDetectedElementLocation()
 
             // Dismiss the onboarding prompt if it's showing
@@ -528,6 +599,7 @@ final class CompanionManager: ObservableObject {
                     },
                     submitDraftText: { [weak self] finalTranscript in
                         self?.lastTranscript = finalTranscript
+                        self?.serviceHealthMonitor.recordSuccess(for: .speechToText)
                         print("🗣️ Companion received transcript: \(finalTranscript)")
                         self?.sendTranscriptToClaudeWithScreenshot(transcript: finalTranscript)
                     }
@@ -593,14 +665,20 @@ final class CompanionManager: ObservableObject {
     private func sendTranscriptToClaudeWithScreenshot(transcript: String) {
         currentResponseTask?.cancel()
         elevenLabsTTSClient.stopPlayback()
+        fallbackSpeechSynthesizer.stopSpeaking(at: .immediate)
 
         currentResponseTask = Task {
             // Stay in processing (spinner) state — no streaming text displayed
             voiceState = .processing
 
+            // Which step is running, so a failure is reported against the
+            // right Status row instead of one generic error.
+            var pipelineStageInProgress: MonitoredServiceComponent = .screenCapture
+
             do {
                 // Capture all connected screens so the AI has full context
                 let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+                serviceHealthMonitor.recordSuccess(for: .screenCapture)
 
                 guard !Task.isCancelled else { return }
 
@@ -617,6 +695,7 @@ final class CompanionManager: ObservableObject {
                     (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
                 }
 
+                pipelineStageInProgress = .claudeChat
                 let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
                     images: labeledImages,
                     systemPrompt: Self.companionVoiceResponseSystemPrompt,
@@ -628,6 +707,7 @@ final class CompanionManager: ObservableObject {
                 )
 
                 guard !Task.isCancelled else { return }
+                serviceHealthMonitor.recordSuccess(for: .claudeChat)
 
                 // Parse the [POINT:...] tag from Claude's response
                 let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
@@ -706,11 +786,17 @@ final class CompanionManager: ObservableObject {
                 if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     do {
                         try await elevenLabsTTSClient.speakText(spokenText)
+                        serviceHealthMonitor.recordSuccess(for: .elevenLabsSpeech)
                         // speakText returns after player.play() — audio is now playing
                         voiceState = .responding
                     } catch {
                         print("⚠️ ElevenLabs TTS error: \(error)")
-                        speakCreditsErrorFallback()
+                        if !Task.isCancelled {
+                            serviceHealthMonitor.recordFailure(for: .elevenLabsSpeech, error: error)
+                            // Claude's answer is fine, only the voice failed, so
+                            // still deliver it with the system voice.
+                            speakWithSystemVoice(spokenText)
+                        }
                     }
                 }
             } catch is CancellationError {
@@ -721,7 +807,11 @@ final class CompanionManager: ObservableObject {
                 // than CancellationError, so check the task itself before
                 // speaking an error the user would hear after pausing.
                 if !Task.isCancelled {
-                    speakCreditsErrorFallback()
+                    let failureDiagnosis = serviceHealthMonitor.recordFailure(
+                        for: pipelineStageInProgress,
+                        error: error
+                    )
+                    speakWithSystemVoice(failureDiagnosis.spokenMessage)
                 }
             }
 
@@ -741,8 +831,8 @@ final class CompanionManager: ObservableObject {
 
         transientHideTask?.cancel()
         transientHideTask = Task {
-            // Wait for TTS audio to finish playing
-            while elevenLabsTTSClient.isPlaying {
+            // Wait for TTS audio (or the system-voice fallback) to finish playing
+            while elevenLabsTTSClient.isPlaying || fallbackSpeechSynthesizer.isSpeaking {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard !Task.isCancelled else { return }
             }
@@ -762,13 +852,12 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// Speaks a hardcoded error message using macOS system TTS when API
-    /// credits run out. Uses NSSpeechSynthesizer so it works even when
-    /// ElevenLabs is down.
-    private func speakCreditsErrorFallback() {
-        let utterance = "I'm all out of credits. Please DM Farza and tell him to bring me back to life."
-        let synthesizer = NSSpeechSynthesizer()
-        synthesizer.startSpeaking(utterance)
+    /// Speaks with the macOS system voice. Used when part of the pipeline
+    /// fails: it works even when ElevenLabs is down, so the user hears either
+    /// Claude's answer or what went wrong.
+    private func speakWithSystemVoice(_ textToSpeak: String) {
+        fallbackSpeechSynthesizer.stopSpeaking(at: .immediate)
+        fallbackSpeechSynthesizer.speak(AVSpeechUtterance(string: textToSpeak))
         voiceState = .responding
     }
 

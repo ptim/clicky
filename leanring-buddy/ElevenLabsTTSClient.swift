@@ -12,6 +12,9 @@ import Foundation
 
 @MainActor
 final class ElevenLabsTTSClient {
+    /// Shared with the Status section's test so both hit the same model.
+    static let textToSpeechModelIdentifier = "eleven_flash_v2_5"
+
     private let proxyURL: URL
     private let session: URLSession
 
@@ -39,7 +42,7 @@ final class ElevenLabsTTSClient {
 
         let body: [String: Any] = [
             "text": text,
-            "model_id": "eleven_flash_v2_5",
+            "model_id": Self.textToSpeechModelIdentifier,
             "voice_settings": [
                 "stability": 0.5,
                 "similarity_boost": 0.75
@@ -57,8 +60,7 @@ final class ElevenLabsTTSClient {
 
         guard (200...299).contains(httpResponse.statusCode) else {
             let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw NSError(domain: "ElevenLabsTTS", code: httpResponse.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: "TTS API error (\(httpResponse.statusCode)): \(errorBody)"])
+            throw WorkerProxyResponseError(httpStatusCode: httpResponse.statusCode, responseBody: errorBody)
         }
 
         try Task.checkCancellation()
