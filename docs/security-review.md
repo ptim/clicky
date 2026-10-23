@@ -62,10 +62,12 @@ If the user enters an email during onboarding, `CompanionManager.swift:152-172` 
 
 ## Recommended changes
 
-1. Remove PostHog analytics, or point it at your own project and stop sending transcripts and replies.
-2. Remove the FormSpark email submission.
-3. Add shared-secret auth to the worker, and have it set the model and a `max_tokens` cap.
-4. Set spend limits on all three provider accounts.
-5. Remove the camera entitlement.
-6. Make login-item registration opt-in.
-7. Remove `SUFeedURL` and `SUPublicEDKey` from `Info.plist`.
+Status as of branch `feature/enhance-local-security`:
+
+1. ✅ Remove PostHog analytics: the SDK, `ClickyAnalytics.swift` and every call site are gone.
+2. ✅ Remove the FormSpark email submission: the onboarding email form is gone too.
+3. ✅ Add shared-secret auth to the worker, and have it set the model and a `max_tokens` cap. The worker requires `X-Clicky-Proxy-Secret`, fails closed when the secret is unset, allows only `claude-sonnet-4-6` / `claude-opus-4-6`, and clamps `max_tokens` to 1024. The app reads the secret from the gitignored `Config/Secrets.xcconfig`.
+4. ⬜ Set spend limits on all three provider accounts. This is done in each provider's dashboard, not in code.
+5. ✅ Remove the camera entitlement.
+6. ✅ Make login-item registration opt-in: there is now a "Launch at login" toggle in the panel, off by default.
+7. ✅ Remove `SUFeedURL` and `SUPublicEDKey` from `Info.plist`.
