@@ -162,6 +162,7 @@ final class CompanionManager: ObservableObject {
         if Self.claudeModelIdentifiers.contains(model) {
             claudeAPI.model = model
         }
+        serviceHealthMonitor.setActiveChatComponent(isOllamaSelected ? .ollamaChat : .claudeChat)
     }
 
     /// Goes through CompanionManager rather than straight to the dictation
@@ -374,6 +375,7 @@ final class CompanionManager: ObservableObject {
 
         // With an Ollama model already picked, learn its capabilities and
         // load it now so the first question isn't stuck behind the load.
+        serviceHealthMonitor.setActiveChatComponent(isOllamaSelected ? .ollamaChat : .claudeChat)
         if isOllamaSelected {
             Task {
                 await refreshInstalledOllamaModels()
@@ -566,7 +568,7 @@ final class CompanionManager: ObservableObject {
     /// Runs every component's test in parallel for the "Test all" button.
     func testAllServiceComponents() async {
         await withTaskGroup(of: Void.self) { taskGroup in
-            for component in MonitoredServiceComponent.allCases {
+            for component in serviceHealthMonitor.visibleComponents {
                 taskGroup.addTask { @MainActor in
                     await self.testServiceComponent(component)
                 }

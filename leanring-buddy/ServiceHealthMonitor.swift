@@ -108,20 +108,38 @@ final class ServiceHealthMonitor: ObservableObject {
         return URLSession(configuration: configuration)
     }()
 
+    /// The chat row for the backend the model picker is using. The other
+    /// backend's row is hidden and left out of the overall status, so a
+    /// Claude user isn't shown a red Ollama row (or the reverse).
+    @Published private(set) var activeChatComponent: MonitoredServiceComponent = .claudeChat
+
+    func setActiveChatComponent(_ activeChatComponent: MonitoredServiceComponent) {
+        guard self.activeChatComponent != activeChatComponent else { return }
+        self.activeChatComponent = activeChatComponent
+    }
+
+    /// The components shown in the Status section and run by "Test all".
+    var visibleComponents: [MonitoredServiceComponent] {
+        let inactiveChatComponent: MonitoredServiceComponent = activeChatComponent == .ollamaChat
+            ? .claudeChat
+            : .ollamaChat
+        return MonitoredServiceComponent.allCases.filter { $0 != inactiveChatComponent }
+    }
+
     func health(for component: MonitoredServiceComponent) -> ServiceComponentHealth {
         healthByComponent[component] ?? ServiceComponentHealth()
     }
 
     var hasAnyFailingComponent: Bool {
-        healthByComponent.values.contains { $0.status == .failing }
+        visibleComponents.contains { health(for: $0).status == .failing }
     }
 
     var hasAnyHealthyComponent: Bool {
-        healthByComponent.values.contains { $0.status == .healthy }
+        visibleComponents.contains { health(for: $0).status == .healthy }
     }
 
     var isAnyComponentChecking: Bool {
-        healthByComponent.values.contains { $0.status == .checking }
+        visibleComponents.contains { health(for: $0).status == .checking }
     }
 
     // MARK: - Recording Results
