@@ -164,6 +164,14 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    /// Goes through CompanionManager rather than straight to the dictation
+    /// manager because the panel only observes CompanionManager; nested
+    /// ObservableObjects don't propagate their changes on their own.
+    func setVoiceInputPreference(_ voiceInputPreference: VoiceInputPreference) {
+        objectWillChange.send()
+        buddyDictationManager.setVoiceInputPreference(voiceInputPreference)
+    }
+
     var isOllamaSelected: Bool {
         selectedModel.hasPrefix(Self.ollamaModelSelectionPrefix)
     }

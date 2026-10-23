@@ -39,6 +39,9 @@ struct CompanionPanelView: View {
                         .padding(.horizontal, 16)
                 }
 
+                voiceInputPickerRow
+                    .padding(.horizontal, 16)
+
                 launchAtLoginToggleRow
                     .padding(.horizontal, 16)
             }
@@ -612,26 +615,65 @@ struct CompanionPanelView: View {
         .padding(.vertical, 4)
     }
 
-    private var speechToTextProviderRow: some View {
-        HStack {
-            HStack(spacing: 8) {
-                Image(systemName: "mic.badge.waveform")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(DS.Colors.textTertiary)
-                    .frame(width: 16)
+    // MARK: - Voice Input Picker
 
-                Text("Speech to Text")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(DS.Colors.textSecondary)
-            }
+    /// Chooses speech-to-text separately from the chat model, so a local
+    /// Ollama model can still be paired with AssemblyAI and vice versa.
+    private var voiceInputPickerRow: some View {
+        let configuredDefaultProviderDisplayName = companionManager.buddyDictationManager
+            .configuredDefaultTranscriptionProviderDisplayName
+
+        return HStack {
+            Text("Voice input")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(DS.Colors.textSecondary)
 
             Spacer()
 
-            Text(companionManager.buddyDictationManager.transcriptionProviderDisplayName)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(DS.Colors.textTertiary)
+            // If no cloud provider is configured the default already is Apple
+            // Speech, so there is nothing to choose between.
+            if configuredDefaultProviderDisplayName == "Apple Speech" {
+                Text(configuredDefaultProviderDisplayName)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(DS.Colors.textTertiary)
+            } else {
+                HStack(spacing: 0) {
+                    voiceInputOptionButton(
+                        label: configuredDefaultProviderDisplayName,
+                        voiceInputPreference: .configuredDefault
+                    )
+                    voiceInputOptionButton(label: "Apple Speech", voiceInputPreference: .appleSpeech)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+                )
+            }
         }
         .padding(.vertical, 4)
+    }
+
+    private func voiceInputOptionButton(label: String, voiceInputPreference: VoiceInputPreference) -> some View {
+        let isSelected = companionManager.buddyDictationManager.voiceInputPreference == voiceInputPreference
+        return Button(action: {
+            companionManager.setVoiceInputPreference(voiceInputPreference)
+        }) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(isSelected ? DS.Colors.textPrimary : DS.Colors.textTertiary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isSelected ? Color.white.opacity(0.1) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
     }
 
     // MARK: - Model Picker

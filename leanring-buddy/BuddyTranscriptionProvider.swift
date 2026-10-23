@@ -29,6 +29,13 @@ protocol BuddyTranscriptionProvider {
     ) async throws -> any BuddyStreamingTranscriptionSession
 }
 
+/// What the panel's Voice input picker can choose: the provider configured in
+/// Info.plist (normally AssemblyAI), or Apple's on-device speech recognition.
+enum VoiceInputPreference: String {
+    case configuredDefault = "default"
+    case appleSpeech = "apple"
+}
+
 enum BuddyTranscriptionProviderFactory {
     private enum PreferredProvider: String {
         case assemblyAI = "assemblyai"
