@@ -5,8 +5,13 @@
  * ships with raw API keys. Keys are stored as Cloudflare secrets.
  *
  * Routes:
- *   POST /chat  → Anthropic Messages API (streaming)
- *   POST /tts   → ElevenLabs TTS API
+ *   POST /chat              → Anthropic Messages API (streaming)
+ *   POST /tts               → ElevenLabs TTS API
+ *   POST /transcribe-token  → AssemblyAI temporary streaming token
+ *
+ * Every request must carry the shared secret in the
+ * `X-Clicky-Proxy-Secret` header. Without it, anyone who finds the
+ * worker URL (it is compiled into the app) could spend your API credit.
  */
 
 interface Env {
@@ -14,7 +19,17 @@ interface Env {
   ELEVENLABS_API_KEY: string;
   ELEVENLABS_VOICE_ID: string;
   ASSEMBLYAI_API_KEY: string;
+  CLICKY_PROXY_SHARED_SECRET: string;
 }
+
+const PROXY_SHARED_SECRET_HEADER_NAME = "X-Clicky-Proxy-Secret";
+
+// Only the models the app's model picker offers. The worker enforces this
+// so a leaked secret can't be used to run arbitrary (pricier) models.
+const ALLOWED_CLAUDE_MODELS = new Set(["claude-sonnet-4-6", "claude-opus-4-6"]);
+
+// The app asks for at most 1024 output tokens; clamp anything larger.
+const MAXIMUM_CLAUDE_OUTPUT_TOKENS = 1024;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -22,6 +37,22 @@ export default {
 
     if (request.method !== "POST") {
       return new Response("Method not allowed", { status: 405 });
+    }
+
+    // Fail closed: if the secret was never configured, refuse everything
+    // rather than silently running as an open proxy.
+    if (!env.CLICKY_PROXY_SHARED_SECRET) {
+      console.error("CLICKY_PROXY_SHARED_SECRET is not set; refusing all requests.");
+      return new Response("Proxy is not configured", { status: 500 });
+    }
+
+    const providedSharedSecret = request.headers.get(PROXY_SHARED_SECRET_HEADER_NAME) ?? "";
+    const isSharedSecretValid = await isEqualInConstantTime(
+      providedSharedSecret,
+      env.CLICKY_PROXY_SHARED_SECRET
+    );
+    if (!isSharedSecretValid) {
+      return new Response("Unauthorized", { status: 401 });
     }
 
     try {
@@ -48,8 +79,37 @@ export default {
   },
 };
 
+/**
+ * Compares two strings without leaking how many leading characters match.
+ * Hashing first gives both sides the same length, which timingSafeEqual requires.
+ */
+async function isEqualInConstantTime(providedValue: string, expectedValue: string): Promise<boolean> {
+  const textEncoder = new TextEncoder();
+  const [providedValueDigest, expectedValueDigest] = await Promise.all([
+    crypto.subtle.digest("SHA-256", textEncoder.encode(providedValue)),
+    crypto.subtle.digest("SHA-256", textEncoder.encode(expectedValue)),
+  ]);
+  return crypto.subtle.timingSafeEqual(providedValueDigest, expectedValueDigest);
+}
+
 async function handleChat(request: Request, env: Env): Promise<Response> {
-  const body = await request.text();
+  let requestBody: Record<string, unknown>;
+  try {
+    requestBody = await request.json();
+  } catch {
+    return new Response("Request body must be JSON", { status: 400 });
+  }
+
+  if (typeof requestBody.model !== "string" || !ALLOWED_CLAUDE_MODELS.has(requestBody.model)) {
+    return new Response(`Model not allowed: ${String(requestBody.model)}`, { status: 400 });
+  }
+
+  const requestedMaxTokens = typeof requestBody.max_tokens === "number"
+    ? requestBody.max_tokens
+    : MAXIMUM_CLAUDE_OUTPUT_TOKENS;
+  requestBody.max_tokens = Math.min(requestedMaxTokens, MAXIMUM_CLAUDE_OUTPUT_TOKENS);
+
+  const body = JSON.stringify(requestBody);
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",

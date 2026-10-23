@@ -61,6 +61,7 @@ final class AssemblyAIStreamingTranscriptionProvider: BuddyTranscriptionProvider
     private func fetchTemporaryToken() async throws -> String {
         var request = URLRequest(url: URL(string: Self.tokenProxyURL)!)
         request.httpMethod = "POST"
+        WorkerProxyAuthentication.addSharedSecretHeader(to: &request)
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
