@@ -157,6 +157,39 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    /// Whether the user has paused Clicky from the panel. While paused the
+    /// cursor overlay is hidden and the push-to-talk shortcut is ignored.
+    /// Deliberately not persisted so every launch starts unpaused — a pause
+    /// that survived a restart would make Clicky look broken.
+    @Published private(set) var isPaused: Bool = false
+
+    func setPaused(_ paused: Bool) {
+        isPaused = paused
+
+        if paused {
+            // Stop everything mid-flight so nothing keeps talking or pointing
+            // after the user asked Clicky to go quiet.
+            transientHideTask?.cancel()
+            transientHideTask = nil
+            pendingKeyboardShortcutStartTask?.cancel()
+            pendingKeyboardShortcutStartTask = nil
+            buddyDictationManager.cancelCurrentDictation()
+            currentResponseTask?.cancel()
+            currentResponseTask = nil
+            elevenLabsTTSClient.stopPlayback()
+            clearDetectedElementLocation()
+            // The cancelled response task skips its own reset to idle
+            voiceState = .idle
+
+            overlayWindowManager.hideOverlay()
+            isOverlayVisible = false
+        } else if hasCompletedOnboarding && allPermissionsGranted && isClickyCursorEnabled {
+            overlayWindowManager.hasShownOverlayBefore = true
+            overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+            isOverlayVisible = true
+        }
+    }
+
     /// Whether the user has completed onboarding at least once. Persisted
     /// to UserDefaults so the Start button only appears on first launch.
     var hasCompletedOnboarding: Bool {
@@ -212,6 +245,9 @@ final class CompanionManager: ObservableObject {
     /// is already visible so we just restart the welcome animation and video.
     func replayOnboarding() {
         NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+        // Replaying onboarding shows the cursor and teaches push-to-talk,
+        // which would be contradictory while paused, so resume first.
+        isPaused = false
         startOnboardingMusic()
         // Tear down any existing overlays and recreate with isFirstAppearance = true
         overlayWindowManager.hasShownOverlayBefore = false
@@ -355,7 +391,7 @@ final class CompanionManager: ObservableObject {
                     UserDefaults.standard.set(true, forKey: "hasScreenContentPermission")
 
                     // If onboarding was already completed, show the cursor overlay now
-                    if hasCompletedOnboarding && allPermissionsGranted && !isOverlayVisible && isClickyCursorEnabled {
+                    if hasCompletedOnboarding && allPermissionsGranted && !isOverlayVisible && isClickyCursorEnabled && !isPaused {
                         overlayWindowManager.hasShownOverlayBefore = true
                         overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
                         isOverlayVisible = true
@@ -449,6 +485,8 @@ final class CompanionManager: ObservableObject {
             guard !buddyDictationManager.isDictationInProgress else { return }
             // Don't register push-to-talk while the onboarding video is playing
             guard !showOnboardingVideo else { return }
+            // Ignore push-to-talk entirely while the user has paused Clicky
+            guard !isPaused else { return }
 
             // Cancel any pending transient hide so the overlay stays visible
             transientHideTask?.cancel()
@@ -679,7 +717,12 @@ final class CompanionManager: ObservableObject {
                 // User spoke again — response was interrupted
             } catch {
                 print("⚠️ Companion response error: \(error)")
-                speakCreditsErrorFallback()
+                // A cancelled URLSession stream throws URLError.cancelled rather
+                // than CancellationError, so check the task itself before
+                // speaking an error the user would hear after pausing.
+                if !Task.isCancelled {
+                    speakCreditsErrorFallback()
+                }
             }
 
             if !Task.isCancelled {
