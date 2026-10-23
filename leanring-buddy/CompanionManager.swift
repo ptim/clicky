@@ -68,16 +68,14 @@ final class CompanionManager: ObservableObject {
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
-    /// Base URL for the Cloudflare Worker proxy. All API requests route
-    /// through this so keys never ship in the app binary.
-    private static let workerBaseURL = "https://your-worker-name.your-subdomain.workers.dev"
-
+    // All API requests route through the Cloudflare Worker proxy so keys
+    // never ship in the app binary. Its URL is configured in Config/*.xcconfig.
     private lazy var claudeAPI: ClaudeAPI = {
-        return ClaudeAPI(proxyURL: "\(Self.workerBaseURL)/chat", model: selectedModel)
+        return ClaudeAPI(proxyURL: WorkerProxyConfiguration.chatURL, model: selectedModel)
     }()
 
     private lazy var elevenLabsTTSClient: ElevenLabsTTSClient = {
-        return ElevenLabsTTSClient(proxyURL: "\(Self.workerBaseURL)/tts")
+        return ElevenLabsTTSClient(proxyURL: WorkerProxyConfiguration.textToSpeechURL)
     }()
 
     /// Conversation history so Claude remembers prior exchanges within a session.

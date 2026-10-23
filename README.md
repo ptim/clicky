@@ -109,29 +109,20 @@ ELEVENLABS_VOICE_ID=...
 CLICKY_PROXY_SHARED_SECRET=...
 ```
 
-Then update the proxy URLs in the Swift code to point to `http://localhost:8787` instead of the deployed Worker URL while developing. Grep for `clicky-proxy` to find them all.
+Then set `CLICKY_WORKER_BASE_URL = http:/$()/localhost:8787` in `Config/Secrets.xcconfig` (see below) while developing.
 
-### 3. Update the proxy URLs in the app
-
-The app has the Worker URL hardcoded in a few places. Search for `your-worker-name.your-subdomain.workers.dev` and replace it with your Worker URL:
-
-```bash
-grep -r "clicky-proxy" leanring-buddy/
-```
-
-You'll find it in:
-- `CompanionManager.swift` — Claude chat + ElevenLabs TTS
-- `AssemblyAIStreamingTranscriptionProvider.swift` — AssemblyAI token endpoint
-
-### 4. Give the app your shared secret
+### 3. Configure the app
 
 ```bash
 cp Config/Secrets.example.xcconfig Config/Secrets.xcconfig
 ```
 
-Set `CLICKY_PROXY_SHARED_SECRET` in `Config/Secrets.xcconfig` to the same value you gave the Worker. That file is gitignored, so the secret never gets committed. The app sends it to the Worker in the `X-Clicky-Proxy-Secret` header.
+Everything the app needs to reach the Worker lives in `Config/Secrets.xcconfig`. That file is gitignored, so nothing in it gets committed.
 
-### 5. Open in Xcode and run
+- `CLICKY_WORKER_BASE_URL`: your Worker URL, with no trailing slash. Keep the `$()` between the slashes (`https:/$()/...`), because xcconfig treats `//` as the start of a comment.
+- `CLICKY_PROXY_SHARED_SECRET`: the same value you gave the Worker. The app sends it in the `X-Clicky-Proxy-Secret` header.
+
+### 4. Open in Xcode and run
 
 ```bash
 open leanring-buddy.xcodeproj
