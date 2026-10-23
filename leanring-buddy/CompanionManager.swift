@@ -1099,6 +1099,10 @@ final class CompanionManager: ObservableObject {
     /// Parses a [POINT:x,y:label:screenN] or [POINT:none] tag from the end of Claude's response.
     /// Returns the spoken text (tag removed) and the optional coordinate + label + screen number.
     static func parsePointingCoordinates(from responseText: String) -> PointingParseResult {
+        if let boundingBoxParseResult = parseBoundingBoxPointingTag(from: responseText) {
+            return boundingBoxParseResult
+        }
+
         // Match [POINT:none] or [POINT:123,456:label] or [POINT:123,456:label:screen2]
         let pattern = #"\[POINT:(?:none|(\d+)\s*,\s*(\d+)(?::([^\]:\s][^\]:]*?))?(?::screen(\d+))?)\]\s*$"#
 
@@ -1134,6 +1138,51 @@ final class CompanionManager: ObservableObject {
         return PointingParseResult(
             spokenText: spokenText,
             coordinate: CGPoint(x: x, y: y),
+            elementLabel: elementLabel,
+            screenNumber: screenNumber
+        )
+    }
+
+    /// Qwen-VL models are trained to answer with a bounding box rather than a
+    /// point, so they reply `[POINT:x1,y1,x2,y2:label]` or a bare
+    /// `[x1,y1,x2,y2]` at the end. Points at the centre of the box. Returns
+    /// nil when the response doesn't end with a four-number box.
+    private static func parseBoundingBoxPointingTag(from responseText: String) -> PointingParseResult? {
+        let boundingBoxPattern = #"\[(?:POINT:)?(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?::([^\]:]*))?(?::screen(\d+))?[^\]]*\]\s*$"#
+
+        guard let regex = try? NSRegularExpression(pattern: boundingBoxPattern, options: []),
+              let match = regex.firstMatch(in: responseText, range: NSRange(responseText.startIndex..., in: responseText)),
+              let tagRange = Range(match.range, in: responseText) else {
+            return nil
+        }
+
+        var boxCornerValues: [CGFloat] = []
+        for captureGroupIndex in 1...4 {
+            guard let valueRange = Range(match.range(at: captureGroupIndex), in: responseText),
+                  let value = Double(responseText[valueRange]) else {
+                return nil
+            }
+            boxCornerValues.append(CGFloat(value))
+        }
+        let boxCentre = CGPoint(
+            x: (boxCornerValues[0] + boxCornerValues[2]) / 2,
+            y: (boxCornerValues[1] + boxCornerValues[3]) / 2
+        )
+
+        var elementLabel: String? = nil
+        if let labelRange = Range(match.range(at: 5), in: responseText) {
+            elementLabel = String(responseText[labelRange]).trimmingCharacters(in: .whitespaces)
+        }
+
+        var screenNumber: Int? = nil
+        if let screenRange = Range(match.range(at: 6), in: responseText) {
+            screenNumber = Int(responseText[screenRange])
+        }
+
+        let spokenText = String(responseText[..<tagRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return PointingParseResult(
+            spokenText: spokenText,
+            coordinate: boxCentre,
             elementLabel: elementLabel,
             screenNumber: screenNumber
         )

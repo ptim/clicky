@@ -122,7 +122,13 @@ final class OllamaChatProvider: BuddyChatProvider {
             let numberedImageLabels = images.enumerated().map { imageIndex, image in
                 "image \(imageIndex + 1): \(image.label)"
             }
-            currentUserMessage["content"] = numberedImageLabels.joined(separator: "\n") + "\n\n" + userPrompt
+            // Small local models answer the question but tend to drop the
+            // [POINT] tag the long system prompt asks for. Restating it at the
+            // end of the turn, where they pay most attention, fixed that for
+            // qwen2.5vl:3b in testing. Only sent with screenshots, because
+            // that's when the pointing prompt is in use.
+            let pointTagReminder = "(after your spoken answer, end with exactly one [POINT:x,y:label] tag using pixel coordinates in this image, or [POINT:none])"
+            currentUserMessage["content"] = numberedImageLabels.joined(separator: "\n") + "\n\n" + userPrompt + "\n\n" + pointTagReminder
             currentUserMessage["images"] = images.map { image in image.data.base64EncodedString() }
         }
         chatMessages.append(currentUserMessage)
