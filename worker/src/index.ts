@@ -35,6 +35,13 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    // The app sends an unauthenticated `HEAD /` on launch purely to warm up the
+    // TLS connection (see ClaudeAPI.warmUpTLSConnectionIfNeeded). Answer it with
+    // an empty 204 so it doesn't show up as a 405 in the logs; it reveals nothing.
+    if (request.method === "HEAD" && url.pathname === "/") {
+      return new Response(null, { status: 204 });
+    }
+
     if (request.method !== "POST") {
       return new Response("Method not allowed", { status: 405 });
     }
