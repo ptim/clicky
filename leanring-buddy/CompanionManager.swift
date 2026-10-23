@@ -76,6 +76,14 @@ final class CompanionManager: ObservableObject {
         return ClaudeAPI(proxyURL: WorkerProxyConfiguration.chatURL, model: selectedModel)
     }()
 
+    private lazy var claudeChatProvider = ClaudeChatProvider(claudeAPI: claudeAPI)
+
+    /// The chat backend that answers push-to-talk questions, matching the
+    /// model picker.
+    private var activeChatProvider: any BuddyChatProvider {
+        claudeChatProvider
+    }
+
     private lazy var elevenLabsTTSClient: ElevenLabsTTSClient = {
         return ElevenLabsTTSClient(proxyURL: WorkerProxyConfiguration.textToSpeechURL)
     }()
@@ -671,6 +679,10 @@ final class CompanionManager: ObservableObject {
             // Stay in processing (spinner) state — no streaming text displayed
             voiceState = .processing
 
+            // Snapshot the provider once so a picker change mid-response
+            // can't mix two backends within one exchange.
+            let chatProvider = activeChatProvider
+
             // Which step is running, so a failure is reported against the
             // right Status row instead of one generic error.
             var pipelineStageInProgress: MonitoredServiceComponent = .screenCapture
@@ -690,16 +702,12 @@ final class CompanionManager: ObservableObject {
                     return (data: capture.imageData, label: capture.label + dimensionInfo)
                 }
 
-                // Pass conversation history so Claude remembers prior exchanges
-                let historyForAPI = conversationHistory.map { entry in
-                    (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
-                }
-
-                pipelineStageInProgress = .claudeChat
-                let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
+                pipelineStageInProgress = chatProvider.monitoredServiceComponent
+                // Pass conversation history so the model remembers prior exchanges
+                let fullResponseText = try await chatProvider.generateStreamingResponse(
                     images: labeledImages,
                     systemPrompt: Self.companionVoiceResponseSystemPrompt,
-                    conversationHistory: historyForAPI,
+                    conversationHistory: conversationHistory,
                     userPrompt: transcript,
                     onTextChunk: { _ in
                         // No streaming text display — spinner stays until TTS plays
@@ -707,7 +715,7 @@ final class CompanionManager: ObservableObject {
                 )
 
                 guard !Task.isCancelled else { return }
-                serviceHealthMonitor.recordSuccess(for: .claudeChat)
+                serviceHealthMonitor.recordSuccess(for: chatProvider.monitoredServiceComponent)
 
                 // Parse the [POINT:...] tag from Claude's response
                 let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
