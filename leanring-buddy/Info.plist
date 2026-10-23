@@ -6,6 +6,13 @@
 	<true/>
 	<key>ClickyProxySharedSecret</key>
 	<string>$(CLICKY_PROXY_SHARED_SECRET)</string>
+	<key>ClickyWorkerBaseURL</key>
+	<string>$(CLICKY_WORKER_BASE_URL)</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>VoiceTranscriptionProvider</key>
 	<string>assemblyai</string>
 	<key>NSMicrophoneUsageDescription</key>
