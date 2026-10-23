@@ -33,8 +33,10 @@ The app never calls external APIs directly. All requests go through a Cloudflare
 | `POST /tts` | `api.elevenlabs.io/v1/text-to-speech/{voiceId}` | ElevenLabs TTS audio |
 | `POST /transcribe-token` | `streaming.assemblyai.com/v3/token` | Fetches a short-lived (480s) AssemblyAI websocket token |
 
-Worker secrets: `ANTHROPIC_API_KEY`, `ASSEMBLYAI_API_KEY`, `ELEVENLABS_API_KEY`
+Worker secrets: `ANTHROPIC_API_KEY`, `ASSEMBLYAI_API_KEY`, `ELEVENLABS_API_KEY`, `CLICKY_PROXY_SHARED_SECRET`
 Worker vars: `ELEVENLABS_VOICE_ID`
+
+**Proxy authentication**: The worker rejects any request without a matching `X-Clicky-Proxy-Secret` header (and refuses everything if `CLICKY_PROXY_SHARED_SECRET` is unset). `/chat` only accepts the models in the app's picker and clamps `max_tokens` to 1024. On the app side the secret lives in the gitignored `Config/Secrets.xcconfig`, which `Config/Clicky.xcconfig` (the target's base configuration) optionally includes. It reaches the app through the `ClickyProxySharedSecret` Info.plist key and is attached by `WorkerProxyAuthentication.addSharedSecretHeader(to:)`.
 
 ### Key Architecture Decisions
 
@@ -74,13 +76,18 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `ClickyAnalytics.swift` | ~121 | PostHog analytics integration for usage tracking. |
 | `WindowPositionManager.swift` | ~262 | Window placement logic, Screen Recording permission flow, and accessibility permission helpers. |
 | `AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for keys stored in the app bundle Info.plist. |
-| `worker/src/index.ts` | ~142 | Cloudflare Worker proxy. Three routes: `/chat` (Claude), `/tts` (ElevenLabs), `/transcribe-token` (AssemblyAI temp token). |
+| `WorkerProxyAuthentication.swift` | ~31 | Adds the `X-Clicky-Proxy-Secret` header (from the `ClickyProxySharedSecret` Info.plist key) to every Worker request. |
+| `Config/Clicky.xcconfig` | ~7 | Base build configuration for the app target. Optionally includes the gitignored `Config/Secrets.xcconfig` (template: `Config/Secrets.example.xcconfig`). |
+| `worker/src/index.ts` | ~200 | Cloudflare Worker proxy. Three routes: `/chat` (Claude), `/tts` (ElevenLabs), `/transcribe-token` (AssemblyAI temp token). Requires the shared-secret header; restricts `/chat` models and `max_tokens`. |
 
 ## Build & Run
 
 ```bash
 # Open in Xcode
 open leanring-buddy.xcodeproj
+
+# Copy Config/Secrets.example.xcconfig to Config/Secrets.xcconfig and set
+# CLICKY_PROXY_SHARED_SECRET to the worker's value (the file is gitignored)
 
 # Select the leanring-buddy scheme, set signing team, Cmd+R to build and run
 
@@ -100,6 +107,7 @@ npm install
 npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler secret put ASSEMBLYAI_API_KEY
 npx wrangler secret put ELEVENLABS_API_KEY
+npx wrangler secret put CLICKY_PROXY_SHARED_SECRET   # openssl rand -hex 32
 
 # Deploy
 npx wrangler deploy

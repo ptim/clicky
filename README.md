@@ -66,6 +66,15 @@ npx wrangler secret put ASSEMBLYAI_API_KEY
 npx wrangler secret put ELEVENLABS_API_KEY
 ```
 
+Then generate a shared secret so only your app can use the Worker. Without it, anyone who finds the Worker URL could spend your API credit:
+
+```bash
+openssl rand -hex 32   # copy the output
+npx wrangler secret put CLICKY_PROXY_SHARED_SECRET
+```
+
+The Worker refuses every request until this secret is set.
+
 For the ElevenLabs voice ID, open `wrangler.toml` and set it there (it's not sensitive):
 
 ```toml
@@ -97,6 +106,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 ASSEMBLYAI_API_KEY=...
 ELEVENLABS_API_KEY=...
 ELEVENLABS_VOICE_ID=...
+CLICKY_PROXY_SHARED_SECRET=...
 ```
 
 Then update the proxy URLs in the Swift code to point to `http://localhost:8787` instead of the deployed Worker URL while developing. Grep for `clicky-proxy` to find them all.
@@ -113,7 +123,15 @@ You'll find it in:
 - `CompanionManager.swift` — Claude chat + ElevenLabs TTS
 - `AssemblyAIStreamingTranscriptionProvider.swift` — AssemblyAI token endpoint
 
-### 4. Open in Xcode and run
+### 4. Give the app your shared secret
+
+```bash
+cp Config/Secrets.example.xcconfig Config/Secrets.xcconfig
+```
+
+Set `CLICKY_PROXY_SHARED_SECRET` in `Config/Secrets.xcconfig` to the same value you gave the Worker. That file is gitignored, so the secret never gets committed. The app sends it to the Worker in the `X-Clicky-Proxy-Secret` header.
+
+### 5. Open in Xcode and run
 
 ```bash
 open leanring-buddy.xcodeproj

@@ -1,0 +1,7 @@
+// Base build settings for the Clicky app target.
+//
+// Machine-specific secrets live in Secrets.xcconfig next to this file.
+// That file is gitignored and the include is optional (`#include?`) so a
+// fresh clone still builds. Copy Secrets.example.xcconfig to get started.
+
+#include? "Secrets.xcconfig"
