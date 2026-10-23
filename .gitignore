@@ -2,7 +2,11 @@ worker/node_modules/
 worker/.dev.vars
 .DS_Store
 *.xcuserstate
+leanring-buddy.xcodeproj/xcuserdata
 build/
 releases/
 .claude/
 coding-plans/
+
+# Machine-specific build secrets (see Config/Secrets.example.xcconfig)
+Config/Secrets.xcconfig

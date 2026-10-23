@@ -7,7 +7,6 @@
 //  opens a floating panel with companion voice controls.
 //
 
-import ServiceManagement
 import SwiftUI
 import Sparkle
 
@@ -39,9 +38,6 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
         UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 0])
 
-        ClickyAnalytics.configure()
-        ClickyAnalytics.trackAppOpened()
-
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
         companionManager.start()
         // Auto-open the panel if the user still needs to do something:
@@ -49,27 +45,11 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         if !companionManager.hasCompletedOnboarding || !companionManager.allPermissionsGranted {
             menuBarPanelManager?.showPanelOnLaunch()
         }
-        registerAsLoginItemIfNeeded()
         // startSparkleUpdater()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         companionManager.stop()
-    }
-
-    /// Registers the app as a login item so it launches automatically on
-    /// startup. Uses SMAppService which shows the app in System Settings >
-    /// General > Login Items, letting the user toggle it off if they want.
-    private func registerAsLoginItemIfNeeded() {
-        let loginItemService = SMAppService.mainApp
-        if loginItemService.status != .enabled {
-            do {
-                try loginItemService.register()
-                print("🎯 Clicky: Registered as login item")
-            } catch {
-                print("⚠️ Clicky: Failed to register as login item: \(error)")
-            }
-        }
     }
 
     private func startSparkleUpdater() {

@@ -1,0 +1,13 @@
+// Base build settings for the Clicky app target.
+//
+// Machine-specific secrets live in Secrets.xcconfig next to this file.
+// That file is gitignored and the include is optional (`#include?`) so a
+// fresh clone still builds. Copy Secrets.example.xcconfig to get started.
+
+// Base URL of the Cloudflare Worker proxy, without a trailing slash.
+// Override it in Secrets.xcconfig (e.g. to point at `wrangler dev`).
+// xcconfig treats `//` as the start of a comment, so the empty `$()`
+// substitution keeps the URL's `//` from being read as one.
+CLICKY_WORKER_BASE_URL = https:/$()/your-worker-name.your-subdomain.workers.dev
+
+#include? "Secrets.xcconfig"
