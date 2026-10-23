@@ -30,6 +30,9 @@ struct CompanionPanelView: View {
 
                 modelPickerRow
                     .padding(.horizontal, 16)
+
+                launchAtLoginToggleRow
+                    .padding(.horizontal, 16)
             }
 
             if !companionManager.allPermissionsGranted {
@@ -521,6 +524,29 @@ struct CompanionPanelView: View {
             .labelsHidden()
             .tint(DS.Colors.accent)
             .scaleEffect(0.8)
+        }
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - Launch At Login Toggle
+
+    private var launchAtLoginToggleRow: some View {
+        HStack {
+            Text("Launch at login")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(DS.Colors.textSecondary)
+
+            Spacer()
+
+            Toggle("", isOn: Binding(
+                get: { companionManager.isLaunchAtLoginEnabled },
+                set: { companionManager.setLaunchAtLoginEnabled($0) }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .tint(DS.Colors.accent)
+            .scaleEffect(0.8)
+            .pointerCursor()
         }
         .padding(.vertical, 4)
     }

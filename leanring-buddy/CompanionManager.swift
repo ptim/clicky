@@ -11,6 +11,7 @@ import AVFoundation
 import Combine
 import Foundation
 import ScreenCaptureKit
+import ServiceManagement
 import SwiftUI
 
 enum CompanionVoiceState {
@@ -113,6 +114,26 @@ final class CompanionManager: ObservableObject {
         selectedModel = model
         UserDefaults.standard.set(model, forKey: "selectedClaudeModel")
         claudeAPI.model = model
+    }
+
+    /// Whether Clicky is registered to launch at login. Off unless the user
+    /// turns it on from the panel. Read from SMAppService rather than
+    /// UserDefaults so it always matches System Settings > Login Items.
+    @Published private(set) var isLaunchAtLoginEnabled: Bool = SMAppService.mainApp.status == .enabled
+
+    func setLaunchAtLoginEnabled(_ enabled: Bool) {
+        let loginItemService = SMAppService.mainApp
+        do {
+            if enabled {
+                try loginItemService.register()
+            } else {
+                try loginItemService.unregister()
+            }
+        } catch {
+            print("⚠️ Clicky: Failed to \(enabled ? "register" : "unregister") login item: \(error)")
+        }
+        // Re-read the real status so the toggle snaps back if the change failed.
+        isLaunchAtLoginEnabled = loginItemService.status == .enabled
     }
 
     /// User preference for whether the Clicky cursor should be shown.
