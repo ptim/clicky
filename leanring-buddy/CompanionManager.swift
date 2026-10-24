@@ -67,14 +67,34 @@ final class CompanionManager: ObservableObject {
     let overlayWindowManager = OverlayWindowManager()
     /// Tracks which part of the pipeline is failing, for the panel's Status section.
     let serviceHealthMonitor = ServiceHealthMonitor()
+    /// Recent interactions with their screenshots, for the History section.
+    let interactionHistoryStore = CompanionInteractionHistoryStore()
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
     // All API requests route through the Cloudflare Worker proxy so keys
     // never ship in the app binary. Its URL is configured in Config/*.xcconfig.
     private lazy var claudeAPI: ClaudeAPI = {
-        return ClaudeAPI(proxyURL: WorkerProxyConfiguration.chatURL, model: selectedModel)
+        // Never hand an Ollama selection to the Claude client: it still
+        // needs a real Claude model for the onboarding demo and the Status test.
+        let claudeModel = Self.claudeModelIdentifiers.contains(selectedModel)
+            ? selectedModel
+            : Self.defaultClaudeModelIdentifier
+        return ClaudeAPI(proxyURL: WorkerProxyConfiguration.chatURL, model: claudeModel)
     }()
+
+    private lazy var claudeChatProvider = ClaudeChatProvider(claudeAPI: claudeAPI)
+
+    /// Talks to the local Ollama server. Calls go straight to localhost,
+    /// not through the worker.
+    private let ollamaAPI = OllamaAPI()
+
+    /// Models the local Ollama server has pulled, for the panel's model menu.
+    @Published private(set) var installedOllamaModels: [OllamaInstalledModel] = []
+    /// Why the Ollama model list couldn't be loaded (usually Ollama isn't
+    /// running), shown under the menu. Nil when the last refresh worked.
+    @Published private(set) var ollamaModelListErrorMessage: String?
+    @Published private(set) var isRefreshingOllamaModels = false
 
     private lazy var elevenLabsTTSClient: ElevenLabsTTSClient = {
         return ElevenLabsTTSClient(proxyURL: WorkerProxyConfiguration.textToSpeechURL)
@@ -113,13 +133,145 @@ final class CompanionManager: ObservableObject {
     /// Used by the panel to show accurate status text ("Active" vs "Ready").
     @Published private(set) var isOverlayVisible: Bool = false
 
-    /// The Claude model used for voice responses. Persisted to UserDefaults.
-    @Published var selectedModel: String = UserDefaults.standard.string(forKey: "selectedClaudeModel") ?? "claude-sonnet-4-6"
+    private static let defaultClaudeModelIdentifier = "claude-sonnet-4-6"
+    private static let claudeModelIdentifiers = ["claude-sonnet-4-6", "claude-opus-4-6"]
+
+    /// Ollama picks are stored in the same setting as Claude model IDs, as
+    /// "ollama:<model name>", so one value says which backend answers. A bare
+    /// "ollama:" means Ollama was picked but no model is installed yet.
+    private static let ollamaModelSelectionPrefix = "ollama:"
+
+    /// The model used for voice responses: a Claude model ID or an Ollama
+    /// selection. Persisted to UserDefaults.
+    @Published var selectedModel: String = CompanionManager.validatedStoredModelSelection()
+
+    /// Anything unrecognised in UserDefaults (older builds, manual edits)
+    /// falls back to the default, so an unknown string never reaches the worker.
+    private static func validatedStoredModelSelection() -> String {
+        guard let storedModelSelection = UserDefaults.standard.string(forKey: "selectedClaudeModel") else {
+            return defaultClaudeModelIdentifier
+        }
+        if claudeModelIdentifiers.contains(storedModelSelection)
+            || storedModelSelection.hasPrefix(ollamaModelSelectionPrefix) {
+            return storedModelSelection
+        }
+        return defaultClaudeModelIdentifier
+    }
 
     func setSelectedModel(_ model: String) {
         selectedModel = model
         UserDefaults.standard.set(model, forKey: "selectedClaudeModel")
-        claudeAPI.model = model
+        if Self.claudeModelIdentifiers.contains(model) {
+            claudeAPI.model = model
+        }
+        serviceHealthMonitor.setActiveChatComponent(isOllamaSelected ? .ollamaChat : .claudeChat)
+    }
+
+    /// Goes through CompanionManager rather than straight to the dictation
+    /// manager because the panel only observes CompanionManager; nested
+    /// ObservableObjects don't propagate their changes on their own.
+    func setVoiceInputPreference(_ voiceInputPreference: VoiceInputPreference) {
+        objectWillChange.send()
+        buddyDictationManager.setVoiceInputPreference(voiceInputPreference)
+    }
+
+    var isOllamaSelected: Bool {
+        selectedModel.hasPrefix(Self.ollamaModelSelectionPrefix)
+    }
+
+    /// The picked Ollama model's name, or nil when Claude is selected or
+    /// Ollama has no model picked yet.
+    var selectedOllamaModelName: String? {
+        guard isOllamaSelected else { return nil }
+        let ollamaModelName = String(selectedModel.dropFirst(Self.ollamaModelSelectionPrefix.count))
+        return ollamaModelName.isEmpty ? nil : ollamaModelName
+    }
+
+    /// The installed model matching the current pick, once the model list
+    /// has loaded. The panel uses it to say whether the model can see the screen.
+    var selectedOllamaInstalledModel: OllamaInstalledModel? {
+        guard let selectedOllamaModelName else { return nil }
+        return installedOllamaModels.first { $0.name == selectedOllamaModelName }
+    }
+
+    /// Called when the user taps the Ollama segment. Picks the model they
+    /// last used, or else the first one that can see the screen, because
+    /// that's the one that keeps Clicky's pointing working.
+    func selectOllamaAsChatProvider() {
+        Task {
+            await refreshInstalledOllamaModels()
+
+            let lastSelectedOllamaModelName = UserDefaults.standard.string(forKey: "lastSelectedOllamaModel")
+            let lastSelectedModelIsStillInstalled = installedOllamaModels.contains { $0.name == lastSelectedOllamaModelName }
+
+            if let lastSelectedOllamaModelName, lastSelectedModelIsStillInstalled {
+                selectOllamaModel(named: lastSelectedOllamaModelName)
+            } else if let preferredOllamaModel = installedOllamaModels.first(where: { $0.supportsVision })
+                        ?? installedOllamaModels.first {
+                selectOllamaModel(named: preferredOllamaModel.name)
+            } else {
+                // Nothing to pick yet; the panel explains what to install.
+                setSelectedModel(Self.ollamaModelSelectionPrefix)
+            }
+        }
+    }
+
+    func selectOllamaModel(named ollamaModelName: String) {
+        setSelectedModel(Self.ollamaModelSelectionPrefix + ollamaModelName)
+        UserDefaults.standard.set(ollamaModelName, forKey: "lastSelectedOllamaModel")
+        loadSelectedOllamaModelIntoMemory()
+    }
+
+    func refreshInstalledOllamaModels() async {
+        isRefreshingOllamaModels = true
+        defer { isRefreshingOllamaModels = false }
+
+        do {
+            installedOllamaModels = try await ollamaAPI.fetchInstalledModels()
+            ollamaModelListErrorMessage = installedOllamaModels.isEmpty
+                ? "No models installed. Try: ollama pull qwen2.5vl"
+                : nil
+        } catch {
+            installedOllamaModels = []
+            ollamaModelListErrorMessage = ServiceHealthMonitor.diagnoseFailure(of: .ollamaChat, error: error).summaryMessage
+        }
+    }
+
+    /// Loading a model takes seconds, so do it as soon as it's picked rather
+    /// than on the first question. Failures are ignored here; the question
+    /// itself reports them.
+    private func loadSelectedOllamaModelIntoMemory() {
+        guard let selectedOllamaModelName else { return }
+        Task {
+            do {
+                try await ollamaAPI.loadModelIntoMemory(modelName: selectedOllamaModelName)
+                print("🦙 Ollama: \(selectedOllamaModelName) loaded")
+            } catch {
+                print("⚠️ Ollama: couldn't preload \(selectedOllamaModelName): \(error)")
+            }
+        }
+    }
+
+    /// The chat backend for the current pick. For Ollama, the model's
+    /// capabilities must be known first (they decide whether screenshots are
+    /// sent), so the model list is fetched if it hasn't been yet.
+    private func resolveActiveChatProvider() async throws -> any BuddyChatProvider {
+        guard isOllamaSelected else { return claudeChatProvider }
+
+        guard let selectedOllamaModelName else {
+            throw OllamaModelSelectionError(message: "No Ollama model is picked")
+        }
+        if selectedOllamaInstalledModel == nil {
+            // Fetched directly rather than via refreshInstalledOllamaModels so
+            // a stopped Ollama throws its connection error, which is what
+            // gets diagnosed and spoken.
+            installedOllamaModels = try await ollamaAPI.fetchInstalledModels()
+            ollamaModelListErrorMessage = nil
+        }
+        guard let selectedOllamaInstalledModel else {
+            throw OllamaResponseError(httpStatusCode: 404, errorMessage: "model '\(selectedOllamaModelName)' not found")
+        }
+        return OllamaChatProvider(installedModel: selectedOllamaInstalledModel, ollamaAPI: ollamaAPI)
     }
 
     /// Whether Clicky is registered to launch at login. Off unless the user
@@ -222,6 +374,16 @@ final class CompanionManager: ObservableObject {
         // Eagerly touch the Claude API so its TLS warmup handshake completes
         // well before the onboarding demo fires at ~40s into the video.
         _ = claudeAPI
+
+        // With an Ollama model already picked, learn its capabilities and
+        // load it now so the first question isn't stuck behind the load.
+        serviceHealthMonitor.setActiveChatComponent(isOllamaSelected ? .ollamaChat : .claudeChat)
+        if isOllamaSelected {
+            Task {
+                await refreshInstalledOllamaModels()
+                loadSelectedOllamaModelIntoMemory()
+            }
+        }
 
         // If the user already completed onboarding AND all permissions are
         // still granted, show the cursor overlay immediately. If permissions
@@ -399,7 +561,8 @@ final class CompanionManager: ObservableObject {
         }
         await serviceHealthMonitor.runTest(
             for: component,
-            claudeModelIdentifier: selectedModel,
+            claudeModelIdentifier: claudeAPI.model,
+            ollamaModelName: selectedOllamaModelName,
             transcriptionProviderDisplayName: buddyDictationManager.transcriptionProviderDisplayName
         )
     }
@@ -407,7 +570,7 @@ final class CompanionManager: ObservableObject {
     /// Runs every component's test in parallel for the "Test all" button.
     func testAllServiceComponents() async {
         await withTaskGroup(of: Void.self) { taskGroup in
-            for component in MonitoredServiceComponent.allCases {
+            for component in serviceHealthMonitor.visibleComponents {
                 taskGroup.addTask { @MainActor in
                     await self.testServiceComponent(component)
                 }
@@ -655,6 +818,24 @@ final class CompanionManager: ObservableObject {
     - element is on screen 2 (not where cursor is): "that's over on your other monitor — see the terminal window? [POINT:400,300:terminal:screen2]"
     """
 
+    /// For Ollama models that can't see images. The screen and pointing
+    /// instructions are left out: the model gets no screenshot, and on a
+    /// small model they only waste attention and slow the first token.
+    private static let textOnlyCompanionVoiceResponseSystemPrompt = """
+    you're clicky, a friendly always-on companion that lives in the user's menu bar. the user just spoke to you via push-to-talk. your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
+
+    rules:
+    - default to one or two sentences. be direct and dense. BUT if the user asks you to explain more, go deeper, or elaborate, then go all out.
+    - all lowercase, casual, warm. no emojis.
+    - write for the ear, not the eye. short sentences. no lists, bullet points, markdown, or formatting — just natural speech.
+    - don't use abbreviations or symbols that sound weird read aloud. write "for example" not "e.g.", spell out small numbers.
+    - you can't see the user's screen right now. if they ask about something on it, say so plainly and ask them to describe it, or suggest picking a model that can see the screen.
+    - you can help with anything — coding, writing, general knowledge, brainstorming.
+    - never say "simply" or "just".
+    - don't read out code verbatim. describe what the code does or what needs to change conversationally.
+    - never output coordinate tags like [POINT:...].
+    """
+
     // MARK: - AI Response Pipeline
 
     /// Captures a screenshot, sends it along with the transcript to Claude,
@@ -673,33 +854,52 @@ final class CompanionManager: ObservableObject {
 
             // Which step is running, so a failure is reported against the
             // right Status row instead of one generic error.
-            var pipelineStageInProgress: MonitoredServiceComponent = .screenCapture
+            var pipelineStageInProgress: MonitoredServiceComponent = isOllamaSelected ? .ollamaChat : .claudeChat
+
+            // Declared outside the do block so a failure can still be
+            // recorded in History with whatever was captured before it.
+            var chatModelDescription = isOllamaSelected
+                ? "Ollama · \(selectedOllamaModelName ?? "no model")"
+                : "Claude · \(claudeAPI.model)"
+            // Text-only models never get the screenshot: it isn't even
+            // captured. With no captures, pointing below is skipped too.
+            var screenCaptures: [CompanionScreenCapture] = []
 
             do {
-                // Capture all connected screens so the AI has full context
-                let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
-                serviceHealthMonitor.recordSuccess(for: .screenCapture)
+                // Resolve the provider once so a picker change mid-response
+                // can't mix two backends within one exchange.
+                let chatProvider = try await resolveActiveChatProvider()
+                chatModelDescription = chatProvider.chatModelDescription
 
                 guard !Task.isCancelled else { return }
 
-                // Build image labels with the actual screenshot pixel dimensions
-                // so Claude's coordinate space matches the image it sees. We
-                // scale from screenshot pixels to display points ourselves.
-                let labeledImages = screenCaptures.map { capture in
-                    let dimensionInfo = " (image dimensions: \(capture.screenshotWidthInPixels)x\(capture.screenshotHeightInPixels) pixels)"
-                    return (data: capture.imageData, label: capture.label + dimensionInfo)
+                var labeledImages: [(data: Data, label: String)] = []
+                if chatProvider.supportsScreenshotImages {
+                    pipelineStageInProgress = .screenCapture
+                    // Only the screen under the cursor is sent: it saves tokens
+                    // and stops the model answering about another monitor.
+                    screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG(onlyCursorScreen: true)
+                    serviceHealthMonitor.recordSuccess(for: .screenCapture)
+
+                    guard !Task.isCancelled else { return }
+
+                    // Build image labels with the actual screenshot pixel dimensions
+                    // so Claude's coordinate space matches the image it sees. We
+                    // scale from screenshot pixels to display points ourselves.
+                    labeledImages = screenCaptures.map { capture in
+                        let dimensionInfo = " (image dimensions: \(capture.screenshotWidthInPixels)x\(capture.screenshotHeightInPixels) pixels)"
+                        return (data: capture.imageData, label: capture.label + dimensionInfo)
+                    }
                 }
 
-                // Pass conversation history so Claude remembers prior exchanges
-                let historyForAPI = conversationHistory.map { entry in
-                    (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
-                }
-
-                pipelineStageInProgress = .claudeChat
-                let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
+                pipelineStageInProgress = chatProvider.monitoredServiceComponent
+                // Pass conversation history so the model remembers prior exchanges
+                let fullResponseText = try await chatProvider.generateStreamingResponse(
                     images: labeledImages,
-                    systemPrompt: Self.companionVoiceResponseSystemPrompt,
-                    conversationHistory: historyForAPI,
+                    systemPrompt: chatProvider.supportsScreenshotImages
+                        ? Self.companionVoiceResponseSystemPrompt
+                        : Self.textOnlyCompanionVoiceResponseSystemPrompt,
+                    conversationHistory: conversationHistory,
                     userPrompt: transcript,
                     onTextChunk: { _ in
                         // No streaming text display — spinner stays until TTS plays
@@ -707,11 +907,22 @@ final class CompanionManager: ObservableObject {
                 )
 
                 guard !Task.isCancelled else { return }
-                serviceHealthMonitor.recordSuccess(for: .claudeChat)
+                serviceHealthMonitor.recordSuccess(for: chatProvider.monitoredServiceComponent)
 
                 // Parse the [POINT:...] tag from Claude's response
                 let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
                 let spokenText = parseResult.spokenText
+
+                interactionHistoryStore.record(CompanionInteractionHistoryEntry(
+                    interactionDate: Date(),
+                    transcript: transcript,
+                    chatModelDescription: chatModelDescription,
+                    screenCapture: screenCaptures.first,
+                    rawResponseText: fullResponseText,
+                    pointCoordinate: parseResult.coordinate,
+                    pointElementLabel: parseResult.elementLabel,
+                    errorMessage: nil
+                ))
 
                 // Handle element pointing if Claude returned coordinates.
                 // Switch to idle BEFORE setting the location so the triangle
@@ -729,7 +940,7 @@ final class CompanionManager: ObservableObject {
                        screenNumber >= 1 && screenNumber <= screenCaptures.count {
                         return screenCaptures[screenNumber - 1]
                     }
-                    return screenCaptures.first(where: { $0.isCursorScreen })
+                    return screenCaptures.first(where: { $0.isCursorScreen }) ?? screenCaptures.first
                 }()
 
                 if let pointCoordinate = parseResult.coordinate,
@@ -811,6 +1022,16 @@ final class CompanionManager: ObservableObject {
                         for: pipelineStageInProgress,
                         error: error
                     )
+                    interactionHistoryStore.record(CompanionInteractionHistoryEntry(
+                        interactionDate: Date(),
+                        transcript: transcript,
+                        chatModelDescription: chatModelDescription,
+                        screenCapture: screenCaptures.first,
+                        rawResponseText: nil,
+                        pointCoordinate: nil,
+                        pointElementLabel: nil,
+                        errorMessage: failureDiagnosis.summaryMessage
+                    ))
                     speakWithSystemVoice(failureDiagnosis.spokenMessage)
                 }
             }
@@ -878,6 +1099,10 @@ final class CompanionManager: ObservableObject {
     /// Parses a [POINT:x,y:label:screenN] or [POINT:none] tag from the end of Claude's response.
     /// Returns the spoken text (tag removed) and the optional coordinate + label + screen number.
     static func parsePointingCoordinates(from responseText: String) -> PointingParseResult {
+        if let boundingBoxParseResult = parseBoundingBoxPointingTag(from: responseText) {
+            return boundingBoxParseResult
+        }
+
         // Match [POINT:none] or [POINT:123,456:label] or [POINT:123,456:label:screen2]
         let pattern = #"\[POINT:(?:none|(\d+)\s*,\s*(\d+)(?::([^\]:\s][^\]:]*?))?(?::screen(\d+))?)\]\s*$"#
 
@@ -913,6 +1138,51 @@ final class CompanionManager: ObservableObject {
         return PointingParseResult(
             spokenText: spokenText,
             coordinate: CGPoint(x: x, y: y),
+            elementLabel: elementLabel,
+            screenNumber: screenNumber
+        )
+    }
+
+    /// Qwen-VL models are trained to answer with a bounding box rather than a
+    /// point, so they reply `[POINT:x1,y1,x2,y2:label]` or a bare
+    /// `[x1,y1,x2,y2]` at the end. Points at the centre of the box. Returns
+    /// nil when the response doesn't end with a four-number box.
+    private static func parseBoundingBoxPointingTag(from responseText: String) -> PointingParseResult? {
+        let boundingBoxPattern = #"\[(?:POINT:)?(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?::([^\]:]*))?(?::screen(\d+))?[^\]]*\]\s*$"#
+
+        guard let regex = try? NSRegularExpression(pattern: boundingBoxPattern, options: []),
+              let match = regex.firstMatch(in: responseText, range: NSRange(responseText.startIndex..., in: responseText)),
+              let tagRange = Range(match.range, in: responseText) else {
+            return nil
+        }
+
+        var boxCornerValues: [CGFloat] = []
+        for captureGroupIndex in 1...4 {
+            guard let valueRange = Range(match.range(at: captureGroupIndex), in: responseText),
+                  let value = Double(responseText[valueRange]) else {
+                return nil
+            }
+            boxCornerValues.append(CGFloat(value))
+        }
+        let boxCentre = CGPoint(
+            x: (boxCornerValues[0] + boxCornerValues[2]) / 2,
+            y: (boxCornerValues[1] + boxCornerValues[3]) / 2
+        )
+
+        var elementLabel: String? = nil
+        if let labelRange = Range(match.range(at: 5), in: responseText) {
+            elementLabel = String(responseText[labelRange]).trimmingCharacters(in: .whitespaces)
+        }
+
+        var screenNumber: Int? = nil
+        if let screenRange = Range(match.range(at: 6), in: responseText) {
+            screenNumber = Int(responseText[screenRange])
+        }
+
+        let spokenText = String(responseText[..<tagRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return PointingParseResult(
+            spokenText: spokenText,
+            coordinate: boxCentre,
             elementLabel: elementLabel,
             screenNumber: screenNumber
         )

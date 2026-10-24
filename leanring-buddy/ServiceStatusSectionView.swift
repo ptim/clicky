@@ -31,7 +31,7 @@ struct ServiceStatusSectionView: View {
 
             if isStatusSectionExpanded {
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(MonitoredServiceComponent.allCases) { component in
+                    ForEach(serviceHealthMonitor.visibleComponents) { component in
                         componentRow(for: component)
                     }
                 }
@@ -116,7 +116,7 @@ struct ServiceStatusSectionView: View {
     }
 
     private var overallStatusSummaryText: String {
-        let failingComponentCount = MonitoredServiceComponent.allCases.filter {
+        let failingComponentCount = serviceHealthMonitor.visibleComponents.filter {
             serviceHealthMonitor.health(for: $0).status == .failing
         }.count
         if failingComponentCount == 1 {
@@ -298,8 +298,9 @@ struct ServiceStatusSectionView: View {
     }
 }
 
-/// Small outlined capsule button used for the per-row Test and Copy actions.
-private struct ServiceStatusPillButton: View {
+/// Small outlined capsule button used for the per-row Test and Copy actions,
+/// and by the History section.
+struct ServiceStatusPillButton: View {
     let label: String
     let isDisabled: Bool
     let action: () -> Void

@@ -262,7 +262,13 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         return AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined
     }
 
-    private let transcriptionProvider: any BuddyTranscriptionProvider
+    private var transcriptionProvider: any BuddyTranscriptionProvider
+    /// Both providers stay alive for the app's lifetime so switching back
+    /// and forth reuses them. AssemblyAI in particular must keep its one
+    /// shared URLSession; recreating it breaks the OS connection pool.
+    private let configuredDefaultTranscriptionProvider: any BuddyTranscriptionProvider
+    private lazy var appleSpeechTranscriptionProvider = AppleSpeechTranscriptionProvider()
+    @Published private(set) var voiceInputPreference: VoiceInputPreference
     private let audioEngine = AVAudioEngine()
     private var activeTranscriptionSession: (any BuddyStreamingTranscriptionSession)?
     private var activeStartSource: BuddyDictationStartSource?
@@ -281,10 +287,39 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     private var lastPermissionRequestCompletedAt: Date?
 
     override init() {
-        let transcriptionProvider = BuddyTranscriptionProviderFactory.makeDefaultProvider()
-        self.transcriptionProvider = transcriptionProvider
-        self.transcriptionProviderDisplayName = transcriptionProvider.displayName
+        let configuredDefaultTranscriptionProvider = BuddyTranscriptionProviderFactory.makeDefaultProvider()
+        self.configuredDefaultTranscriptionProvider = configuredDefaultTranscriptionProvider
+        self.transcriptionProvider = configuredDefaultTranscriptionProvider
+        self.transcriptionProviderDisplayName = configuredDefaultTranscriptionProvider.displayName
+        self.voiceInputPreference = .configuredDefault
         super.init()
+
+        if let storedVoiceInputPreferenceRawValue = UserDefaults.standard.string(forKey: "voiceInputPreference"),
+           let storedVoiceInputPreference = VoiceInputPreference(rawValue: storedVoiceInputPreferenceRawValue) {
+            setVoiceInputPreference(storedVoiceInputPreference)
+        }
+    }
+
+    /// Display name of the Info.plist-configured provider, for the picker's
+    /// first option. Equals "Apple Speech" when no cloud provider is configured.
+    var configuredDefaultTranscriptionProviderDisplayName: String {
+        configuredDefaultTranscriptionProvider.displayName
+    }
+
+    /// Switches speech-to-text for the next push-to-talk. A session already
+    /// recording keeps the provider it started with.
+    func setVoiceInputPreference(_ newVoiceInputPreference: VoiceInputPreference) {
+        voiceInputPreference = newVoiceInputPreference
+        UserDefaults.standard.set(newVoiceInputPreference.rawValue, forKey: "voiceInputPreference")
+
+        switch newVoiceInputPreference {
+        case .configuredDefault:
+            transcriptionProvider = configuredDefaultTranscriptionProvider
+        case .appleSpeech:
+            transcriptionProvider = appleSpeechTranscriptionProvider
+        }
+        transcriptionProviderDisplayName = transcriptionProvider.displayName
+        print("🎙️ Transcription: switched to \(transcriptionProvider.displayName)")
     }
 
     func updateContextualKeyterms(_ contextualKeyterms: [String]) {

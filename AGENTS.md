@@ -14,10 +14,10 @@ All API keys live on a Cloudflare Worker proxy — nothing sensitive ships in th
 - **App Type**: Menu bar-only (`LSUIElement=true`), no dock icon or main window
 - **Framework**: SwiftUI (macOS native) with AppKit bridging for menu bar panel and cursor overlay
 - **Pattern**: MVVM with `@StateObject` / `@Published` state management
-- **AI Chat**: Claude (Sonnet 4.6 default, Opus 4.6 optional) via Cloudflare Worker proxy with SSE streaming
-- **Speech-to-Text**: AssemblyAI real-time streaming (`u3-rt-pro` model) via websocket, with OpenAI and Apple Speech as fallbacks
+- **AI Chat**: Claude (Sonnet 4.6 default, Opus 4.6 optional) via Cloudflare Worker proxy with SSE streaming, or any model on a local Ollama server. Both sit behind the `BuddyChatProvider` protocol.
+- **Speech-to-Text**: AssemblyAI real-time streaming (`u3-rt-pro` model) via websocket, with OpenAI and Apple Speech as fallbacks. The panel's Voice input picker switches between the Info.plist-configured provider and Apple Speech at runtime.
 - **Text-to-Speech**: ElevenLabs (`eleven_flash_v2_5` model) via Cloudflare Worker proxy
-- **Screen Capture**: ScreenCaptureKit (macOS 14.2+), multi-monitor support
+- **Screen Capture**: ScreenCaptureKit (macOS 14.2+). Push-to-talk questions send only the display under the cursor (`captureAllScreensAsJPEG(onlyCursorScreen: true)`) to save tokens and keep the model from answering about, or pointing at, another monitor.
 - **Voice Input**: Push-to-talk via `AVAudioEngine` + pluggable transcription-provider layer. System-wide keyboard shortcut via listen-only CGEvent tap.
 - **Element Pointing**: Claude embeds `[POINT:x,y:label:screenN]` tags in responses. The overlay parses these, maps coordinates to the correct monitor, and animates the blue cursor along a bezier arc to the target.
 - **Concurrency**: `@MainActor` isolation, async/await throughout
@@ -40,6 +40,16 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 
 **Worker URL**: The proxy's base URL is the `CLICKY_WORKER_BASE_URL` build setting. It defaults to a placeholder in `Config/Clicky.xcconfig` and is overridden in `Config/Secrets.xcconfig`, for example `http:/$()/localhost:8787` for `wrangler dev`. The `$()` stops xcconfig reading `//` as a comment. It reaches the app through the `ClickyWorkerBaseURL` Info.plist key and `WorkerProxyConfiguration`, which builds every route URL. `NSAllowsLocalNetworking` permits plain HTTP to localhost.
 
+### Local Models (Ollama)
+
+Picking **Ollama** in the model picker routes push-to-talk questions to a local Ollama server, called directly (not through the Worker) at the `CLICKY_OLLAMA_BASE_URL` build setting (default `http://localhost:11434`, via the `ClickyOllamaBaseURL` Info.plist key and `OllamaConfiguration`). The selection is stored in the same `selectedClaudeModel` UserDefaults key as `ollama:<model name>`.
+
+- Model capabilities come from `/api/tags` (falling back to `/api/show` on older Ollama). Models with `vision` get the screenshots and the full pointing prompt; text-only models skip the screen capture entirely and get `textOnlyCompanionVoiceResponseSystemPrompt`.
+- Every request sets `num_ctx` (`OllamaAPI.contextWindowTokenCount`) because Ollama's default context silently truncates the prompt plus screenshots. The preload request (sent when a model is picked) must use the same value or Ollama reloads the model on the first question.
+- Thinking models are sent `think: false` so voice answers don't start after seconds of silence.
+- The Status section shows only the active chat backend's row (`ServiceHealthMonitor.visibleComponents`).
+- The onboarding demo always uses Claude.
+
 ### Key Architecture Decisions
 
 **Menu Bar Panel Pattern**: The companion panel uses `NSStatusItem` for the menu bar icon and a custom borderless `NSPanel` for the floating control panel. This gives full control over appearance (dark, rounded corners, custom shadow) and avoids the standard macOS menu/popover chrome. The panel is non-activating so it doesn't steal focus. A global event monitor auto-dismisses it on outside clicks.
@@ -57,10 +67,12 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | File | Lines | Purpose |
 |------|-------|---------|
 | `leanring_buddyApp.swift` | ~89 | Menu bar app entry point. Uses `@NSApplicationDelegateAdaptor` with `CompanionAppDelegate` which creates `MenuBarPanelManager` and starts `CompanionManager`. No main window — the app lives entirely in the status bar. |
-| `CompanionManager.swift` | ~1120 | Central state machine. Owns dictation, shortcut monitoring, screen capture, Claude API, ElevenLabs TTS, and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, cursor visibility, and the in-memory paused state (hides the cursor and ignores push-to-talk; resets on launch). Coordinates the full push-to-talk → screenshot → Claude → TTS → pointing pipeline, reports each stage's success/failure to `ServiceHealthMonitor`, and falls back to the macOS system voice (`AVSpeechSynthesizer`) to speak Claude's answer when ElevenLabs fails, or the diagnosed error when an earlier stage fails. |
+| `CompanionManager.swift` | ~1310 | Central state machine. Owns dictation, shortcut monitoring, screen capture, the chat providers (Claude and Ollama, plus the installed-Ollama-model list and preload), ElevenLabs TTS, and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, cursor visibility, and the in-memory paused state (hides the cursor and ignores push-to-talk; resets on launch). Coordinates the full push-to-talk → screenshot → Claude → TTS → pointing pipeline, reports each stage's success/failure to `ServiceHealthMonitor`, and falls back to the macOS system voice (`AVSpeechSynthesizer`) to speak Claude's answer when ElevenLabs fails, or the diagnosed error when an earlier stage fails. |
 | `MenuBarPanelManager.swift` | ~243 | NSStatusItem + custom NSPanel lifecycle. Creates the menu bar icon, manages the floating companion panel (show/hide/position), installs click-outside-to-dismiss monitor. |
-| `CompanionPanelView.swift` | ~797 | SwiftUI panel content for the menu bar dropdown. Shows companion status, push-to-talk instructions, Pause toggle, model picker (Sonnet/Opus), permissions UI, DM feedback button, Status section, and quit button. Reports its height via `clickyPanelContentHeightDidChange` so the panel resizes when content grows. Dark aesthetic using `DS` design system. |
-| `ServiceHealthMonitor.swift` | ~527 | Per-component health (worker proxy, Claude, ElevenLabs, speech-to-text, screen capture, permissions) for the Status section. Diagnoses failures from the provider's error body rather than the HTTP status alone (ElevenLabs returns 401 for an exhausted key quota), and runs the Test button checks. Defines `WorkerProxyResponseError`, which `ClaudeAPI` and `ElevenLabsTTSClient` throw for non-2xx responses. |
+| `CompanionPanelView.swift` | ~938 | SwiftUI panel content for the menu bar dropdown. Shows companion status, push-to-talk instructions, Pause toggle, model picker (Sonnet/Opus/Ollama, with an Ollama model menu marking vision models), Voice input picker (AssemblyAI/Apple Speech), permissions UI, DM feedback button, Status section, and quit button. Reports its height via `clickyPanelContentHeightDidChange` so the panel resizes when content grows. Dark aesthetic using `DS` design system. |
+| `ServiceHealthMonitor.swift` | ~638 | Per-component health (worker proxy, Claude or Ollama, ElevenLabs, speech-to-text, screen capture, permissions) for the Status section. Diagnoses failures from the provider's error body rather than the HTTP status alone (ElevenLabs returns 401 for an exhausted key quota), and runs the Test button checks. Defines `WorkerProxyResponseError`, which `ClaudeAPI` and `ElevenLabsTTSClient` throw for non-2xx responses. |
+| `CompanionInteractionHistory.swift` | ~265 | In-memory store of the last 10 push-to-talk interactions (transcript, model, screenshot sent, raw response, [POINT] coordinates, errors) for debugging pointing. Renders the annotated screenshot (red crosshair plus 50px box) and the 50px crop centred on the point, and shows them in the system Quick Look panel via temporary PNGs. |
+| `CompanionHistorySectionView.swift` | ~275 | Collapsible History section under Status: per-interaction rows with a screenshot thumbnail, an eye button that reveals the point crop, and click-to-Quick-Look. |
 | `ServiceStatusSectionView.swift` | ~332 | Collapsible Status section in the panel: overall green/red dot, per-component rows with Test buttons, expandable raw error with Copy, and a "Test all" button. Auto-expands when something fails. |
 | `OverlayWindow.swift` | ~881 | Full-screen transparent overlay hosting the blue cursor, response text, waveform, and spinner. Handles cursor animation, element pointing with bezier arcs, multi-monitor coordinate mapping, and fade-out transitions. |
 | `CompanionResponseOverlay.swift` | ~217 | SwiftUI view for the response text bubble and waveform displayed next to the cursor in the overlay. |
@@ -72,6 +84,8 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `AppleSpeechTranscriptionProvider.swift` | ~147 | Local fallback transcription provider backed by Apple's Speech framework. |
 | `BuddyAudioConversionSupport.swift` | ~108 | Audio conversion helpers. Converts live mic buffers to PCM16 mono audio and builds WAV payloads for upload-based providers. |
 | `GlobalPushToTalkShortcutMonitor.swift` | ~132 | System-wide push-to-talk monitor. Owns the listen-only `CGEvent` tap and publishes press/release transitions. |
+| `BuddyChatProvider.swift` | ~130 | Protocol for chat backends plus `ClaudeChatProvider` (wraps `ClaudeAPI`) and `OllamaChatProvider`. Each provider says whether it accepts screenshots and which Status row its failures belong to. |
+| `OllamaAPI.swift` | ~266 | Client for the local Ollama server: model list with capabilities, version check, model preload, streamed `/api/chat`. Defines `OllamaConfiguration`, `OllamaResponseError` and `OllamaModelSelectionError`. |
 | `ClaudeAPI.swift` | ~291 | Claude vision API client with streaming (SSE) and non-streaming modes. TLS warmup optimization, image MIME detection, conversation history support. |
 | `OpenAIAPI.swift` | ~142 | OpenAI GPT vision API client. |
 | `ElevenLabsTTSClient.swift` | ~81 | ElevenLabs TTS client. Sends text to the Worker proxy, plays back audio via `AVAudioPlayer`. Exposes `isPlaying` for transient cursor scheduling. |
@@ -81,7 +95,7 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for keys stored in the app bundle Info.plist. |
 | `WorkerProxyAuthentication.swift` | ~31 | Adds the `X-Clicky-Proxy-Secret` header (from the `ClickyProxySharedSecret` Info.plist key) to every Worker request. |
 | `WorkerProxyConfiguration.swift` | ~33 | Reads the Worker base URL (from the `ClickyWorkerBaseURL` Info.plist key) and exposes the `/chat`, `/tts` and `/transcribe-token` route URLs. |
-| `Config/Clicky.xcconfig` | ~13 | Base build configuration for the app target. Defines the default `CLICKY_WORKER_BASE_URL`. Optionally includes the gitignored `Config/Secrets.xcconfig` (template: `Config/Secrets.example.xcconfig`). |
+| `Config/Clicky.xcconfig` | ~18 | Base build configuration for the app target. Defines the default `CLICKY_WORKER_BASE_URL` and `CLICKY_OLLAMA_BASE_URL`. Optionally includes the gitignored `Config/Secrets.xcconfig` (template: `Config/Secrets.example.xcconfig`). |
 | `worker/src/index.ts` | ~200 | Cloudflare Worker proxy. Three routes: `/chat` (Claude), `/tts` (ElevenLabs), `/transcribe-token` (AssemblyAI temp token). Requires the shared-secret header; restricts `/chat` models and `max_tokens`. |
 
 ## Build & Run
