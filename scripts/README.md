@@ -60,3 +60,21 @@ The script checks GitHub for the latest release (e.g. `v1.5`, build 6) and autom
    You'll be prompted for an app-specific password (generate one at [appleid.apple.com](https://appleid.apple.com)).
 5. **Sparkle EdDSA key** — already generated and stored in Keychain (done during initial Sparkle setup)
 6. **Build the project in Xcode at least once** so SPM downloads Sparkle and the Sparkle CLI tools are available
+
+## `build-clicky-launcher-app.sh` — Start the local worker with Clicky
+
+For builds whose `CLICKY_WORKER_BASE_URL` points at `wrangler dev` (`http://localhost:8787`). Builds **Clicky Launcher.app**, which:
+
+1. Starts `npx wrangler dev` in `worker/` (keys from `worker/.dev.vars`), unless something is already listening on port 8787
+2. Opens Clicky once the worker is up
+3. Stops the worker again when Clicky quits (only if the launcher started it)
+
+```bash
+# Installs to ~/Applications
+./scripts/build-clicky-launcher-app.sh
+
+# Or somewhere else
+./scripts/build-clicky-launcher-app.sh /Applications
+```
+
+The app runs `scripts/start-clicky-with-local-worker.sh` from this checkout by absolute path, so rebuild it if you move the repository. You can also run that script directly. Logs go to `~/Library/Logs/Clicky/`. Add the launcher (not Clicky) to Login Items to start both at login.

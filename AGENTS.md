@@ -119,6 +119,8 @@ npx wrangler deploy
 npx wrangler dev
 ```
 
+`scripts/build-clicky-launcher-app.sh` builds **Clicky Launcher.app**, which runs `scripts/start-clicky-with-local-worker.sh`: it starts `wrangler dev` on port 8787 (unless something already listens there), opens Clicky, and stops the worker when Clicky quits. The script uses bash because zsh refuses `set -m` (needed to kill the npx → wrangler → workerd process group) without a terminal.
+
 ## Code Style & Conventions
 
 ### Variable and Method Naming
